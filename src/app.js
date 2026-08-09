@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import formbody from '@fastify/formbody';
+import cors from '@fastify/cors';
 import { openDatabase } from './db/index.js';
 import { HouseholdsRepo } from './db/households.js';
 import { WatchEventsRepo } from './db/watchEvents.js';
@@ -21,6 +22,12 @@ export function buildApp({ dbPath = ':memory:', logger = true } = {}) {
 
   const app = Fastify({ logger });
   app.register(formbody);
+  // Open CORS is safe here: every endpoint is either public (household
+  // creation) or authorizes purely via the opaque token in the URL/body —
+  // nothing is cookie/session-based, so there's no cross-origin credential
+  // to leak. Needed so the GitHub Pages installer (a different origin) can
+  // call POST /api/households (see design doc §9).
+  app.register(cors, { origin: true });
 
   app.decorate('households', households);
   app.decorate('watchEvents', watchEvents);

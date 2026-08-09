@@ -15,6 +15,7 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
+    "@fastify/cors": "^11.3.0",
     "@fastify/formbody": "^9.0.0",
     "@napi-rs/canvas": "^1.0.5",
     "argon2": "^0.45.1",

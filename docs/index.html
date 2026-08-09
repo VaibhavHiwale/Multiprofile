@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Switchboard — Household Installer</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #0d0d10; color: #eee; margin: 0; padding: 1.5rem;
+    display: flex; flex-direction: column; align-items: center; }
+  main { width: 100%; max-width: 520px; }
+  h1 { font-size: 1.8rem; margin-bottom: 0.25rem; }
+  .sub { color: #999; margin-top: 0; }
+  section { background: #16161a; border-radius: 16px; padding: 1.5rem; margin-bottom: 1.25rem; }
+  label { display: block; font-size: 0.85rem; color: #bbb; margin-bottom: 0.35rem; }
+  input[type=url] { width: 100%; padding: 0.6rem; border-radius: 8px; border: 1px solid #444;
+    background: #111; color: #eee; font-size: 1rem; }
+  .hint { font-size: 0.78rem; color: #888; margin-top: 0.4rem; line-height: 1.4; }
+  button { font: inherit; background: #5b3ee0; color: #fff; border: none; border-radius: 999px;
+    padding: 0.7rem 1.4rem; cursor: pointer; margin-top: 1rem; width: 100%; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .btn-secondary { background: #2a2a33; }
+  a.btn { display: block; text-align: center; text-decoration: none; font: inherit; background: #5b3ee0;
+    color: #fff; border-radius: 999px; padding: 0.7rem 1.4rem; margin-top: 0.6rem; }
+  code { display: block; background: #1f1f26; padding: 0.6rem 0.8rem; border-radius: 8px; word-break: break-all;
+    font-size: 0.8rem; margin: 0.5rem 0; }
+  img#qr { width: 160px; height: 160px; border-radius: 8px; background: #fff; display: block; margin: 1rem auto; }
+  .error { color: #e0507b; font-size: 0.85rem; margin-top: 0.75rem; }
+  .hidden { display: none; }
+  footer { font-size: 0.78rem; color: #666; text-align: center; line-height: 1.6; }
+  footer a { color: #999; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Switchboard</h1>
+  <p class="sub">Create a household and install it into Stremio — no account, no manual URL editing.</p>
+
+  <section id="setupSection">
+    <label for="apiBase">Your Switchboard service URL</label>
+    <input type="url" id="apiBase" placeholder="https://your-switchboard-host.example.com">
+    <p class="hint">
+      This is the address of the Switchboard backend you (or whoever runs your household's
+      instance) deployed — see the project README for deployment options. Saved locally in
+      this browser so you only need to enter it once.
+    </p>
+    <button id="createBtn">Create household</button>
+    <p class="error hidden" id="setupError"></p>
+  </section>
+
+  <section id="resultSection" class="hidden">
+    <label>Manifest URL</label>
+    <code id="manifestUrl"></code>
+    <button class="btn-secondary" id="copyBtn">Copy URL</button>
+    <a class="btn" id="deepLink" href="#">Open in Stremio</a>
+    <a class="btn btn-secondary" id="configureLink" href="#">Open household dashboard</a>
+    <img id="qr" alt="Install QR code">
+    <p class="hint">Scan the QR code on a phone or TV to install without typing anything.</p>
+  </section>
+
+  <footer>
+    <p>
+      This addon never requests or stores your Stremio account credentials — see the
+      <a href="https://github.com/VaibhavHiwale/Multiprofile" target="_blank" rel="noopener">
+        project repository
+      </a> for the full architecture and trade-offs.
+    </p>
+  </footer>
+</main>
+
+<script>
+(function () {
+  const STORAGE_KEY = 'switchboard-api-base';
+  const apiBaseInput = document.getElementById('apiBase');
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved) apiBaseInput.value = saved;
+
+  const setupError = document.getElementById('setupError');
+  const resultSection = document.getElementById('resultSection');
+  const createBtn = document.getElementById('createBtn');
+
+  function normalizedBase() {
+    return apiBaseInput.value.trim().replace(/\/+$/, '');
+  }
+
+  createBtn.addEventListener('click', async () => {
+    setupError.classList.add('hidden');
+    const base = normalizedBase();
+    if (!base || !/^https?:\/\//i.test(base)) {
+      setupError.textContent = 'Enter a valid http(s) URL for your Switchboard service.';
+      setupError.classList.remove('hidden');
+      return;
+    }
+
+    createBtn.disabled = true;
+    createBtn.textContent = 'Creating…';
+    try {
+      const res = await fetch(base + '/api/households', { method: 'POST' });
+      if (!res.ok) throw new Error('Service responded with ' + res.status);
+      const { token } = await res.json();
+      localStorage.setItem(STORAGE_KEY, base);
+
+      const manifestUrl = base + '/' + token + '/manifest.json';
+      const host = base.replace(/^https?:\/\//i, '');
+      document.getElementById('manifestUrl').textContent = manifestUrl;
+      document.getElementById('deepLink').href = 'stremio://' + host + '/' + token + '/manifest.json';
+      document.getElementById('configureLink').href = base + '/' + token + '/configure';
+      document.getElementById('qr').src = base + '/' + token + '/qrcode.png';
+      resultSection.classList.remove('hidden');
+    } catch (err) {
+      setupError.textContent =
+        'Could not reach that service (' + err.message + '). Check the URL, that the service ' +
+        'is running, and that it allows requests from this page.';
+      setupError.classList.remove('hidden');
+    } finally {
+      createBtn.disabled = false;
+      createBtn.textContent = 'Create household';
+    }
+  });
+
+  document.getElementById('copyBtn').addEventListener('click', () => {
+    navigator.clipboard.writeText(document.getElementById('manifestUrl').textContent);
+    const btn = document.getElementById('copyBtn');
+    const original = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = original; }, 1200);
+  });
+})();
+</script>
+</body>
+</html>

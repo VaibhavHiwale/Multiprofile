@@ -31,6 +31,19 @@ test('POST /api/households creates a household and its manifest is reachable', a
   assert.equal(manifest.behaviorHints.configurable, true);
 });
 
+test('POST /api/households allows cross-origin requests (needed by the GitHub Pages installer)', async (t) => {
+  const app = makeApp();
+  t.after(() => app.close());
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/households',
+    headers: { origin: 'https://example.github.io' },
+  });
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.headers['access-control-allow-origin'], 'https://example.github.io');
+});
+
 test('GET /:token/manifest.json 404s identically for malformed and unknown tokens', async (t) => {
   const app = makeApp();
   t.after(() => app.close());
