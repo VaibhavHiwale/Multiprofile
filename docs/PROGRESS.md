@@ -1,9 +1,73 @@
-# Switchboard — build progress & resume notes
+# MultiProfile (formerly Switchboard) — build progress & resume notes
 
 Read this first if you're picking the project back up. It tracks what's
 actually done (verified by tests, not just written), what's in flight, and
 the exact next step. The full spec lives in `docs/design.md` — this file is
 the status layer on top of it.
+
+## ⚠️ Current state as of the Cloudflare Workers migration attempt (read this first)
+
+Everything below this section describes the **Node.js/Fastify build**, which
+is complete, tested (40 tests), and lives on `main`. **`main` is untouched
+and still reflects that working Node.js state.**
+
+A migration to **Cloudflare Workers + D1 + R2** (Hono replacing Fastify, D1
+replacing better-sqlite3, `hash-wasm`→`@noble/hashes` argon2id replacing
+native `argon2`, `@cf-wasm/satori`+`@cf-wasm/resvg` replacing
+`@napi-rs/canvas`, Durable Objects replacing the in-memory rate limiter,
+Cron Triggers replacing `setInterval`, D1's point-in-time recovery replacing
+the custom backup job) was attempted on the `cloudflare-workers-migration`
+branch. **It is not finished and not verified working.** Status:
+
+- A large amount of code was written covering most of the original surface
+  area (households/profiles/watch_events/title_genre_cache D1 repos, Hono
+  routes for profiles/catalog/meta/stream/switch/configure, poster
+  generation, QR codes, PIN hashing, a D1-backed error log, an R2-backed
+  weekly rollup) — see the branch for the actual files.
+- **This work was sitting entirely uncommitted** when the background task
+  that produced it was cut off (see below). It has since been committed as
+  a single WIP checkpoint commit and pushed to
+  `origin/cloudflare-workers-migration` purely to prevent loss — that
+  commit should **not** be read as "this was a deliberate stopping point,"
+  it's a safety snapshot of an in-progress state.
+- **Why it stopped:** the background agent doing this work was terminated
+  by hitting the Claude account's *monthly spend limit*, mid-task (it had
+  just started the `/configure` route/dashboard and had not yet run a
+  single test pass). This is a real constraint on how much further
+  autonomous work can happen until the limit resets or is raised at
+  claude.ai/settings/usage.
+- **Known-broken right now:** `npm test` fails before running a single
+  test — 0 tests execute. Root cause: `@cloudflare/vitest-pool-workers`
+  (Miniflare) can't resolve a `unicode-trie` module load
+  (`node_modules/unicode-trie/swap`), almost certainly a transitive
+  dependency of the satori font-shaping pipeline used for poster
+  generation. This is the same category of "works differently on Workers
+  than expected" risk already documented in `src/lib/pin.js`'s comments
+  (the `hash-wasm` → `@noble/hashes` swap) — a library that looks pure-JS
+  but has a Node-specific loading path underneath. **Not yet diagnosed
+  further or fixed.**
+- `npm run lint` is clean (fixed: `eslint.config.js` still listed Node
+  globals instead of Workers/`workerd` globals; also deleted
+  `src/lib/errorLog.js`, dead code orphaned by the D1-backed
+  `src/db/errorEvents.js` replacement).
+- Real Cloudflare credentials (API token + account ID) have been provided
+  by the user and verified present as `CLOUDFLARE_API_TOKEN` /
+  `CLOUDFLARE_ACCOUNT_ID` user-level environment variables on the dev
+  machine — **nothing has been provisioned or deployed with them yet**,
+  and nothing should be until the test suite actually passes locally.
+
+**Next step for whoever resumes this:** figure out exactly which package
+pulls in `unicode-trie` (likely `satori`'s font/BiDi shaping via
+`@cf-wasm/satori` or a transitive `fontkit`/`opentype.js`-family dep — run
+`npm ls unicode-trie` to find the exact chain), and either exclude/replace
+it, or find whether `@cf-wasm/satori` has a build variant that avoids
+pulling in the Node-oriented package. Do not attempt to work around this by
+degrading the poster-generation feature without documenting that decision
+here the same honest way other trade-offs in this file are documented.
+
+Do **not** merge `cloudflare-workers-migration` into `main` until the test
+suite passes. `main`'s Node.js build remains the only verified-working
+state of this project.
 
 ## How to resume
 
