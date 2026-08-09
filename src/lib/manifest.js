@@ -12,13 +12,32 @@ export function buildManifest(householdToken) {
       'Multi-profile switching for Stremio households. Continue Watching and ' +
       'recommendations are built from what this addon observes itself — it ' +
       'never requests or stores your Stremio account credentials.',
-    resources: ['catalog', 'meta', 'stream'],
+    resources: [
+      { name: 'catalog', types: ['other', 'movie', 'series'] },
+      { name: 'meta', types: ['other'], idPrefixes: ['switchboard:'] },
+      { name: 'stream', types: ['other'], idPrefixes: ['switchboard:'] },
+      // Registered purely to observe watch activity (see design doc §1/§4.3)
+      // — this addon never returns a playable stream itself.
+      { name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt'] },
+    ],
     types: ['other', 'movie', 'series'],
     catalogs: [
       {
         type: 'other',
         id: 'switchboard-profiles',
         name: 'Switch Profile',
+        extra: [],
+      },
+      {
+        type: 'movie',
+        id: 'switchboard-continue-watching',
+        name: 'Continue Watching',
+        extra: [],
+      },
+      {
+        type: 'series',
+        id: 'switchboard-continue-watching',
+        name: 'Continue Watching',
         extra: [],
       },
     ],

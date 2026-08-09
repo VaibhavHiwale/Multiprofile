@@ -1,18 +1,47 @@
 import Fastify from 'fastify';
-import { z } from 'zod';
+import formbody from '@fastify/formbody';
 import { openDatabase } from './db/index.js';
 import { HouseholdsRepo } from './db/households.js';
+import { WatchEventsRepo } from './db/watchEvents.js';
 import { buildManifest } from './lib/manifest.js';
-
-const tokenParamSchema = z.object({
-  token: z.string().regex(/^[0-9a-f]{32}$/, 'invalid household token'),
-});
+import { resolveHousehold } from './lib/household-guard.js';
+import { createRateLimiter } from './lib/rateLimit.js';
+import { recordError } from './lib/errorLog.js';
+import profilesRoutes from './routes/profiles.js';
+import stremioRoutes from './routes/stremio.js';
+import switchRoutes from './routes/switch.js';
 
 export function buildApp({ dbPath = ':memory:', logger = true } = {}) {
   const db = openDatabase(dbPath);
   const households = new HouseholdsRepo(db);
+  const watchEvents = new WatchEventsRepo(db);
 
   const app = Fastify({ logger });
+  app.register(formbody);
+
+  app.decorate('households', households);
+  app.decorate('watchEvents', watchEvents);
+  app.decorate('rawDb', db);
+  app.decorate('rateLimiter', createRateLimiter());
+
+  // Catches both thrown resolver exceptions and synchronous DB-write
+  // failures (better-sqlite3 throws synchronously; Fastify routes both
+  // to this same handler) — see docs/PROGRESS.md for the observability
+  // requirement this satisfies.
+  app.setErrorHandler(async (err, req, reply) => {
+    await recordError({
+      component: 'http',
+      error: err,
+      requestPath: req.url,
+      householdToken: req.params?.token,
+    });
+    req.log.error(err);
+    const statusCode =
+      Number.isInteger(err.statusCode) && err.statusCode >= 400 && err.statusCode < 600
+        ? err.statusCode
+        : 500;
+    reply.code(statusCode).send({ error: statusCode === 500 ? 'internal error' : err.message });
+  });
 
   app.get('/healthz', async () => ({ status: 'ok' }));
 
@@ -26,25 +55,15 @@ export function buildApp({ dbPath = ':memory:', logger = true } = {}) {
   });
 
   app.get('/:token/manifest.json', async (req, reply) => {
-    const parsed = tokenParamSchema.safeParse(req.params);
-    if (!parsed.success) {
-      reply.code(404);
-      return { error: 'not found' };
-    }
-    const { token } = parsed.data;
-    const household = households.getHousehold(token);
-    // Identical generic 404 for a malformed vs. a valid-but-unknown token —
-    // token guessing shouldn't be able to distinguish the two (see design doc §6).
-    if (!household) {
-      reply.code(404);
-      return { error: 'not found' };
-    }
+    const household = resolveHousehold(households, req, reply);
+    if (!household) return;
     reply.header('Cache-Control', 'no-cache');
-    return buildManifest(token);
+    return buildManifest(household.id);
   });
 
-  app.decorate('households', households);
-  app.decorate('rawDb', db);
+  app.register(profilesRoutes);
+  app.register(stremioRoutes);
+  app.register(switchRoutes);
 
   app.addHook('onClose', (instance, done) => {
     db.close();

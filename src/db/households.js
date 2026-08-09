@@ -27,6 +27,18 @@ export class HouseholdsRepo {
       nextSortOrder: db.prepare(
         'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM profiles WHERE household_id = ?'
       ),
+      updateProfile: db.prepare(
+        `UPDATE profiles SET name = @name, avatar_url = @avatarUrl, pin_hash = @pinHash,
+           is_kids = @isKids, sort_order = @sortOrder
+         WHERE id = @id AND household_id = @householdId`
+      ),
+      deleteProfile: db.prepare('DELETE FROM profiles WHERE id = ? AND household_id = ?'),
+      clearActiveProfileIfDeleted: db.prepare(
+        'UPDATE households SET active_profile_id = NULL WHERE id = ? AND active_profile_id = ?'
+      ),
+      setSortOrder: db.prepare(
+        'UPDATE profiles SET sort_order = ? WHERE id = ? AND household_id = ?'
+      ),
     };
   }
 
@@ -76,6 +88,50 @@ export class HouseholdsRepo {
   setActiveProfile(householdId, profileId) {
     const result = this.stmts.setActiveProfile.run(profileId, householdId, profileId);
     return result.changes > 0;
+  }
+
+  updateProfile(householdId, profileId, { name, avatarUrl, pinHash, isKids, sortOrder }) {
+    const existing = this.getProfile(householdId, profileId);
+    if (!existing) {
+      throw new ProfileNotFoundError(profileId);
+    }
+    this.stmts.updateProfile.run({
+      id: profileId,
+      householdId,
+      name: name ?? existing.name,
+      avatarUrl: avatarUrl === undefined ? existing.avatar_url : avatarUrl,
+      pinHash: pinHash === undefined ? existing.pin_hash : pinHash,
+      isKids: (isKids ?? Boolean(existing.is_kids)) ? 1 : 0,
+      sortOrder: sortOrder ?? existing.sort_order,
+    });
+    return this.getProfile(householdId, profileId);
+  }
+
+  deleteProfile(householdId, profileId) {
+    const result = this.stmts.deleteProfile.run(profileId, householdId);
+    if (result.changes === 0) {
+      throw new ProfileNotFoundError(profileId);
+    }
+    this.stmts.clearActiveProfileIfDeleted.run(householdId, profileId);
+  }
+
+  // Applies a full ordering to profiles in one transaction; ids not belonging
+  // to the household are ignored.
+  reorderProfiles(householdId, orderedProfileIds) {
+    const apply = this.db.transaction((ids) => {
+      ids.forEach((profileId, index) => {
+        this.stmts.setSortOrder.run(index, profileId, householdId);
+      });
+    });
+    apply(orderedProfileIds);
+    return this.listProfiles(householdId);
+  }
+}
+
+export class ProfileNotFoundError extends Error {
+  constructor(profileId) {
+    super(`profile not found: ${profileId}`);
+    this.name = 'ProfileNotFoundError';
   }
 }
 
