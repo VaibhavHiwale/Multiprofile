@@ -5,17 +5,21 @@ import { ProfileNotFoundError, ProfileLimitError } from '../db/households.js';
 
 const nameSchema = z.string().trim().min(1).max(40);
 const pinSchema = z.string().regex(/^\d{4,8}$/, 'PIN must be 4-8 digits');
+// Either a short emoji glyph (rendered on the generated poster, see
+// lib/poster.js) or a full URL — stored as-is in the fixed `avatar_url`
+// column from design doc §5, whichever the /configure picker sent.
+const avatarSchema = z.string().min(1).max(2048);
 
 const createProfileSchema = z.object({
   name: nameSchema,
-  avatarUrl: z.string().url().max(2048).nullable().optional(),
+  avatarUrl: avatarSchema.nullable().optional(),
   pin: pinSchema.optional(),
   isKids: z.boolean().optional(),
 });
 
 const updateProfileSchema = z.object({
   name: nameSchema.optional(),
-  avatarUrl: z.string().url().max(2048).nullable().optional(),
+  avatarUrl: avatarSchema.nullable().optional(),
   pin: z.union([pinSchema, z.null()]).optional(), // string sets it, null clears it
   isKids: z.boolean().optional(),
 });

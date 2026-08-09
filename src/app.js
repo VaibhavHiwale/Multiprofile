@@ -11,6 +11,7 @@ import { recordError } from './lib/errorLog.js';
 import profilesRoutes from './routes/profiles.js';
 import stremioRoutes from './routes/stremio.js';
 import switchRoutes from './routes/switch.js';
+import configureRoutes from './routes/configure.js';
 
 export function buildApp({ dbPath = ':memory:', logger = true } = {}) {
   const db = openDatabase(dbPath);
@@ -67,6 +68,7 @@ export function buildApp({ dbPath = ':memory:', logger = true } = {}) {
   app.register(profilesRoutes);
   app.register(stremioRoutes);
   app.register(switchRoutes);
+  app.register(configureRoutes);
 
   app.addHook('onClose', (instance, done) => {
     db.close();

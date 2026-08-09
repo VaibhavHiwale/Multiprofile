@@ -21,10 +21,22 @@ function initialsFor(name) {
   return (parts[0][0] + parts[1][0]).toUpperCase();
 }
 
-// Generates a square profile-card poster: initials on a seeded background
-// color, name banner, and small active/kids badges. Called on demand and
-// cached client-side via Cache-Control (see routes/stremio.js).
-export async function generateProfilePoster({ id, name, isActive = false, isKids = false }) {
+// A handful of code points and not an http(s) URL: treat it as the emoji
+// glyph picked in /configure, not a link. Full image-URL avatars aren't
+// fetched/composited in this MVP — falls back to initials instead (a
+// documented limitation, not a bug: see docs/PROGRESS.md).
+function isGlyph(avatarUrl) {
+  if (!avatarUrl) return false;
+  if (/^https?:\/\//i.test(avatarUrl)) return false;
+  return Array.from(avatarUrl).length <= 4;
+}
+
+// Generates a square profile-card poster: an emoji glyph or initials on a
+// seeded background color, name banner, and small active/kids badges.
+// Emoji rendering depends on a color-emoji font being available in the
+// deploy environment. Called on demand and cached client-side via
+// Cache-Control (see routes/stremio.js).
+export async function generateProfilePoster({ id, name, avatarUrl = null, isActive = false, isKids = false }) {
   const canvas = createCanvas(SIZE, SIZE);
   const ctx = canvas.getContext('2d');
 
@@ -35,7 +47,8 @@ export async function generateProfilePoster({ id, name, isActive = false, isKids
   ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(255,255,255,0.92)';
   ctx.font = 'bold 160px sans-serif';
-  ctx.fillText(initialsFor(name), SIZE / 2, SIZE / 2 - 10);
+  const glyph = isGlyph(avatarUrl) ? avatarUrl : initialsFor(name);
+  ctx.fillText(glyph, SIZE / 2, SIZE / 2 - 10);
 
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(0, SIZE - 70, SIZE, 70);

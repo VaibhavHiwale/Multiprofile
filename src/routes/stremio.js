@@ -176,6 +176,7 @@ export default async function stremioRoutes(app) {
     const png = await generateProfilePoster({
       id: profile.id,
       name: profile.name,
+      avatarUrl: profile.avatar_url,
       isActive: profile.id === household.active_profile_id,
       isKids: Boolean(profile.is_kids),
     });
