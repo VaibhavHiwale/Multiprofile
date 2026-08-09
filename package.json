@@ -1,0 +1,26 @@
+{
+  "name": "switchboard",
+  "version": "1.0.0",
+  "description": "Switchboard — Stremio multi-profile manager (household-scoped catalogs, no Stremio account credential ever stored)",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test test/**/*.test.js",
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "lint": "eslint ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "argon2": "^0.45.1",
+    "better-sqlite3": "^13.0.3",
+    "fastify": "^5.11.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5"
+  }
+}
