@@ -40,6 +40,18 @@ export function buildManifest(householdToken) {
         name: 'Continue Watching',
         extra: [],
       },
+      {
+        type: 'movie',
+        id: 'switchboard-because-you-watched',
+        name: 'Because You Watched',
+        extra: [],
+      },
+      {
+        type: 'series',
+        id: 'switchboard-because-you-watched',
+        name: 'Because You Watched',
+        extra: [],
+      },
     ],
     behaviorHints: {
       configurable: true,

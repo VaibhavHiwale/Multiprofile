@@ -35,6 +35,7 @@ export class WatchEventsRepo {
          )`
       ),
       countForProfile: db.prepare('SELECT COUNT(*) AS n FROM watch_events WHERE profile_id = ?'),
+      distinctImdbIds: db.prepare('SELECT DISTINCT imdb_id FROM watch_events WHERE profile_id = ?'),
     };
   }
 
@@ -58,5 +59,9 @@ export class WatchEventsRepo {
 
   countForProfile(profileId) {
     return this.stmts.countForProfile.get(profileId).n;
+  }
+
+  distinctImdbIds(profileId) {
+    return new Set(this.stmts.distinctImdbIds.all(profileId).map((row) => row.imdb_id));
   }
 }

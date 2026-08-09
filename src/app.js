@@ -3,6 +3,7 @@ import formbody from '@fastify/formbody';
 import { openDatabase } from './db/index.js';
 import { HouseholdsRepo } from './db/households.js';
 import { WatchEventsRepo } from './db/watchEvents.js';
+import { TitleGenreCacheRepo } from './db/titleGenreCache.js';
 import { buildManifest } from './lib/manifest.js';
 import { resolveHousehold } from './lib/household-guard.js';
 import { createRateLimiter } from './lib/rateLimit.js';
@@ -15,12 +16,14 @@ export function buildApp({ dbPath = ':memory:', logger = true } = {}) {
   const db = openDatabase(dbPath);
   const households = new HouseholdsRepo(db);
   const watchEvents = new WatchEventsRepo(db);
+  const titleGenreCache = new TitleGenreCacheRepo(db);
 
   const app = Fastify({ logger });
   app.register(formbody);
 
   app.decorate('households', households);
   app.decorate('watchEvents', watchEvents);
+  app.decorate('titleGenreCache', titleGenreCache);
   app.decorate('rawDb', db);
   app.decorate('rateLimiter', createRateLimiter());
 

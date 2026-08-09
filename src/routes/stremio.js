@@ -1,11 +1,14 @@
 import { resolveHousehold } from '../lib/household-guard.js';
 import { baseUrl } from '../lib/requestUrl.js';
 import { generateProfilePoster } from '../lib/poster.js';
-import { fetchCinemetaMeta } from '../lib/cinemeta.js';
+import { fetchCinemetaMeta, fetchCinemetaCatalogByGenre } from '../lib/cinemeta.js';
 import { parseContentId, isImdbId } from '../lib/contentId.js';
+import { computeTopGenres } from '../lib/affinity.js';
 
 export const PROFILE_ID_PREFIX = 'switchboard:profile:';
 const CONTINUE_WATCHING_CATALOG_ID = 'switchboard-continue-watching';
+const BECAUSE_YOU_WATCHED_CATALOG_ID = 'switchboard-because-you-watched';
+const RECOMMENDATION_ROW_LIMIT = 15;
 
 async function buildContinueWatchingMeta(row) {
   const cine = await fetchCinemetaMeta(row.content_type, row.imdb_id);
@@ -23,6 +26,28 @@ async function buildContinueWatchingMeta(row) {
   };
 }
 
+// "Because you've been watching {genre}" — reads only public Cinemeta
+// catalogs, filtered to this profile's own top genres, excluding anything
+// already in watch_events (design doc §4.5).
+async function buildRecommendationMetas({ profileId, type, watchEvents, titleGenreCache }) {
+  const topGenres = await computeTopGenres({ profileId, watchEvents, titleGenreCache });
+  if (topGenres.length === 0) return [];
+
+  const alreadyWatched = watchEvents.distinctImdbIds(profileId);
+  const seen = new Set();
+  const results = [];
+  for (const genre of topGenres) {
+    const metas = await fetchCinemetaCatalogByGenre(type, genre);
+    for (const meta of metas) {
+      if (alreadyWatched.has(meta.id) || seen.has(meta.id)) continue;
+      seen.add(meta.id);
+      results.push(meta);
+      if (results.length >= RECOMMENDATION_ROW_LIMIT) return results;
+    }
+  }
+  return results;
+}
+
 function profileMeta({ profile, household, origin, token }) {
   const isActive = profile.id === household.active_profile_id;
   return {
@@ -36,7 +61,7 @@ function profileMeta({ profile, household, origin, token }) {
 }
 
 export default async function stremioRoutes(app) {
-  const { households, watchEvents } = app;
+  const { households, watchEvents, titleGenreCache } = app;
 
   app.get('/:token/catalog/:type/:catalogId.json', async (req, reply) => {
     const household = resolveHousehold(households, req, reply);
@@ -62,6 +87,20 @@ export default async function stremioRoutes(app) {
         .filter((row) => row.content_type === type);
       const metas = (await Promise.all(rows.map(buildContinueWatchingMeta))).filter(Boolean);
       reply.header('Cache-Control', 'max-age=120');
+      return { metas };
+    }
+
+    if ((type === 'movie' || type === 'series') && catalogId === BECAUSE_YOU_WATCHED_CATALOG_ID) {
+      if (!household.active_profile_id) {
+        return { metas: [] };
+      }
+      const metas = await buildRecommendationMetas({
+        profileId: household.active_profile_id,
+        type,
+        watchEvents,
+        titleGenreCache,
+      });
+      reply.header('Cache-Control', 'max-age=300');
       return { metas };
     }
 

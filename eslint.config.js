@@ -12,6 +12,8 @@ export default [
         Buffer: 'readonly',
         fetch: 'readonly',
         globalThis: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
       },
     },
     rules: {
