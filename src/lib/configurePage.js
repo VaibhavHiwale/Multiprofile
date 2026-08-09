@@ -12,7 +12,7 @@ const EMOJI_PALETTE = [
 export function renderConfigurePage() {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Switchboard — Household</title>
+<title>MultiProfile — Household</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -57,7 +57,7 @@ export function renderConfigurePage() {
 </head>
 <body>
 <main>
-  <h1>Switchboard</h1>
+  <h1>MultiProfile</h1>
   <p class="sub">Household dashboard — manage profiles for this manifest URL.</p>
 
   <section>
