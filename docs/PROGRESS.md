@@ -5,6 +5,31 @@ actually done (verified by tests, not just written), what's in flight, and
 the exact next step. The full spec lives in `docs/design.md` — this file is
 the status layer on top of it.
 
+## Session summary (2026-08-10) — where things stand right now
+
+- **Live and working**: `https://multiprofile.vaibhavhiwale.workers.dev`.
+  The project owner confirmed the profile-switcher works end-to-end on
+  real Stremio Desktop after the fixes below. Real household data exists
+  in production (`vaibhav`, `Anna Mama`, `Bhushan` profiles) — this is a
+  live, in-use deployment now, not just a demo.
+- Everything is committed and pushed: `git status` clean, `main` matches
+  `origin/main` exactly, nothing local left uncommitted.
+- Two real bugs found via cross-platform testing and fixed (see sections
+  below): the confusing-but-harmless `type: 'other'` → `movie` change, and
+  the actually-important one — removing the automatic `stremio://board`
+  redirect that was throwing an error dialog on every switch on at least
+  one real Stremio Windows build.
+- **Not done, not attempted, needs the project owner:**
+  - Confirming the redirect fix on the *other* platforms (Android, iOS
+    Safari, Android TV, macOS) — only Windows Desktop and Web have been
+    real-device tested so far.
+  - Submitting to stremio-addons.net — deliberately held off (see the "Not
+    yet done" reasoning further down); revisit once the remaining
+    cross-platform pass is done.
+  - Cost/billing alert ($1 threshold) and rate limiting are live and
+    untouched since being set up — no action needed unless usage patterns
+    change.
+
 ## Real-device finding: the switcher works — the first diagnosis was wrong
 
 First cross-platform test (Stremio Desktop and Web, 2026-08-10) surfaced a
