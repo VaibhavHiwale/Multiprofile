@@ -3,21 +3,42 @@ export const MAX_WATCH_EVENTS_PER_PROFILE = 5000;
 export class WatchEventsRepo {
   constructor(db) {
     this.db = db;
-    this.stmts = {
-      // season/episode are nullable, and SQLite's UNIQUE index treats every
-      // NULL as distinct — so ON CONFLICT would never dedupe movie rows.
-      // Look up with IS (NULL-safe) instead and upsert manually.
-      findExisting: db.prepare(
-        'SELECT id FROM watch_events WHERE profile_id = ? AND imdb_id = ? AND season IS ? AND episode IS ?'
-      ),
-      insert: db.prepare(
-        `INSERT INTO watch_events (profile_id, content_type, imdb_id, season, episode, updated_at)
-         VALUES (@profileId, @contentType, @imdbId, @season, @episode, @updatedAt)`
-      ),
-      touch: db.prepare('UPDATE watch_events SET updated_at = ?, content_type = ? WHERE id = ?'),
-      // Ties on updated_at (same millisecond) are broken by id so exactly
-      // one row per imdb_id survives, never two.
-      recentDeduped: db.prepare(
+  }
+
+  // The Node build did find-then-insert-or-touch inside a better-sqlite3
+  // transaction, because SQLite's UNIQUE(profile_id, imdb_id, season, episode)
+  // never fires for movies (NULL season/episode are all distinct). D1 has no
+  // interactive transactions, so migration 0001 adds a NULL-safe unique index
+  // on COALESCE(season,-1)/COALESCE(episode,-1) and this becomes a single
+  // atomic UPSERT — strictly better than the original read-modify-write.
+  //
+  // The prune runs in the same batch (one implicit transaction).
+  async logEvent(profileId, { contentType, imdbId, season = null, episode = null }) {
+    const now = Date.now();
+    await this.db.batch([
+      this.db
+        .prepare(
+          `INSERT INTO watch_events (profile_id, content_type, imdb_id, season, episode, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(profile_id, imdb_id, COALESCE(season, -1), COALESCE(episode, -1))
+           DO UPDATE SET updated_at = excluded.updated_at, content_type = excluded.content_type`
+        )
+        .bind(profileId, contentType, imdbId, season, episode, now),
+      this.db
+        .prepare(
+          `DELETE FROM watch_events WHERE profile_id = ? AND id NOT IN (
+             SELECT id FROM watch_events WHERE profile_id = ? ORDER BY updated_at DESC LIMIT ?
+           )`
+        )
+        .bind(profileId, profileId, MAX_WATCH_EVENTS_PER_PROFILE),
+    ]);
+  }
+
+  // Ties on updated_at (same millisecond) are broken by id so exactly one row
+  // per imdb_id survives, never two.
+  async listRecentDeduped(profileId, limit = 15) {
+    const { results } = await this.db
+      .prepare(
         `SELECT we.* FROM watch_events we
          WHERE we.profile_id = ?
            AND we.id = (
@@ -28,40 +49,25 @@ export class WatchEventsRepo {
            )
          ORDER BY we.updated_at DESC, we.id DESC
          LIMIT ?`
-      ),
-      pruneOldest: db.prepare(
-        `DELETE FROM watch_events WHERE profile_id = ? AND id NOT IN (
-           SELECT id FROM watch_events WHERE profile_id = ? ORDER BY updated_at DESC LIMIT ?
-         )`
-      ),
-      countForProfile: db.prepare('SELECT COUNT(*) AS n FROM watch_events WHERE profile_id = ?'),
-      distinctImdbIds: db.prepare('SELECT DISTINCT imdb_id FROM watch_events WHERE profile_id = ?'),
-    };
+      )
+      .bind(profileId, limit)
+      .all();
+    return results ?? [];
   }
 
-  logEvent(profileId, { contentType, imdbId, season = null, episode = null }) {
-    const now = Date.now();
-    const run = this.db.transaction(() => {
-      const existing = this.stmts.findExisting.get(profileId, imdbId, season, episode);
-      if (existing) {
-        this.stmts.touch.run(now, contentType, existing.id);
-      } else {
-        this.stmts.insert.run({ profileId, contentType, imdbId, season, episode, updatedAt: now });
-      }
-      this.stmts.pruneOldest.run(profileId, profileId, MAX_WATCH_EVENTS_PER_PROFILE);
-    });
-    run();
+  async countForProfile(profileId) {
+    const row = await this.db
+      .prepare('SELECT COUNT(*) AS n FROM watch_events WHERE profile_id = ?')
+      .bind(profileId)
+      .first();
+    return row?.n ?? 0;
   }
 
-  listRecentDeduped(profileId, limit = 15) {
-    return this.stmts.recentDeduped.all(profileId, limit);
-  }
-
-  countForProfile(profileId) {
-    return this.stmts.countForProfile.get(profileId).n;
-  }
-
-  distinctImdbIds(profileId) {
-    return new Set(this.stmts.distinctImdbIds.all(profileId).map((row) => row.imdb_id));
+  async distinctImdbIds(profileId) {
+    const { results } = await this.db
+      .prepare('SELECT DISTINCT imdb_id FROM watch_events WHERE profile_id = ?')
+      .bind(profileId)
+      .all();
+    return new Set((results ?? []).map((row) => row.imdb_id));
   }
 }

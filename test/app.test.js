@@ -1,60 +1,43 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { buildApp } from '../src/app.js';
+import { SELF } from 'cloudflare:test';
+import { describe, it, expect } from 'vitest';
+import { url, createHousehold } from './helpers.js';
+import { ADDON_ID } from '../src/lib/manifest.js';
 
-function makeApp() {
-  return buildApp({ dbPath: ':memory:', logger: false });
-}
-
-test('GET /healthz returns ok', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-
-  const res = await app.inject({ method: 'GET', url: '/healthz' });
-  assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.json(), { status: 'ok' });
-});
-
-test('POST /api/households creates a household and its manifest is reachable', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-
-  const createRes = await app.inject({ method: 'POST', url: '/api/households' });
-  assert.equal(createRes.statusCode, 201);
-  const { token } = createRes.json();
-  assert.match(token, /^[0-9a-f]{32}$/);
-
-  const manifestRes = await app.inject({ method: 'GET', url: `/${token}/manifest.json` });
-  assert.equal(manifestRes.statusCode, 200);
-  const manifest = manifestRes.json();
-  assert.equal(manifest.id, 'org.switchboard.multiprofile');
-  assert.equal(manifest.behaviorHints.configurable, true);
-});
-
-test('POST /api/households allows cross-origin requests (needed by the GitHub Pages installer)', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-
-  const res = await app.inject({
-    method: 'POST',
-    url: '/api/households',
-    headers: { origin: 'https://example.github.io' },
-  });
-  assert.equal(res.statusCode, 201);
-  assert.equal(res.headers['access-control-allow-origin'], 'https://example.github.io');
-});
-
-test('GET /:token/manifest.json 404s identically for malformed and unknown tokens', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-
-  const malformed = await app.inject({ method: 'GET', url: '/not-a-token/manifest.json' });
-  const unknown = await app.inject({
-    method: 'GET',
-    url: `/${'a'.repeat(32)}/manifest.json`,
+describe('core service', () => {
+  it('GET /healthz returns ok', async () => {
+    const res = await SELF.fetch(url('/healthz'));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: 'ok' });
   });
 
-  assert.equal(malformed.statusCode, 404);
-  assert.equal(unknown.statusCode, 404);
-  assert.deepEqual(malformed.json(), unknown.json());
+  it('POST /api/households creates a household and its manifest is reachable', async () => {
+    const token = await createHousehold();
+    expect(token).toMatch(/^[0-9a-f]{32}$/);
+
+    const res = await SELF.fetch(url(`/${token}/manifest.json`));
+    expect(res.status).toBe(200);
+    const manifest = await res.json();
+    expect(manifest.id).toBe(ADDON_ID);
+    expect(manifest.name).toBe('MultiProfile');
+    expect(manifest.behaviorHints.configurable).toBe(true);
+    expect(manifest.behaviorHints.configurationRequired).toBe(false);
+  });
+
+  it('POST /api/households allows cross-origin requests (needed by the GitHub Pages installer)', async () => {
+    const res = await SELF.fetch(url('/api/households'), {
+      method: 'POST',
+      headers: { origin: 'https://example.github.io' },
+    });
+    expect(res.status).toBe(201);
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://example.github.io');
+  });
+
+  it('GET /:token/manifest.json 404s identically for malformed and unknown tokens', async () => {
+    const malformed = await SELF.fetch(url('/not-a-token/manifest.json'));
+    const unknown = await SELF.fetch(url(`/${'a'.repeat(32)}/manifest.json`));
+
+    expect(malformed.status).toBe(404);
+    expect(unknown.status).toBe(404);
+    expect(await malformed.json()).toEqual(await unknown.json());
+  });
 });

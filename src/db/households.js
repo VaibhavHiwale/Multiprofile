@@ -2,128 +2,148 @@ import { generateHouseholdToken, generateId } from '../lib/token.js';
 
 export const MAX_PROFILES_PER_HOUSEHOLD = 12;
 
+// D1 repository for households + profiles.
+//
+// Every method is async: D1's query API is promise-based, unlike the
+// synchronous better-sqlite3 API the Node build used. Statements are still
+// always parameter-bound (never string-interpolated), which is the property
+// design.md §6 actually cares about.
 export class HouseholdsRepo {
   constructor(db) {
     this.db = db;
-    this.stmts = {
-      insertHousehold: db.prepare(
-        'INSERT INTO households (id, created_at, active_profile_id) VALUES (?, ?, NULL)'
-      ),
-      getHousehold: db.prepare('SELECT * FROM households WHERE id = ?'),
-      countProfiles: db.prepare(
-        'SELECT COUNT(*) AS n FROM profiles WHERE household_id = ?'
-      ),
-      insertProfile: db.prepare(
-        `INSERT INTO profiles (id, household_id, name, avatar_url, pin_hash, is_kids, sort_order, created_at)
-         VALUES (@id, @householdId, @name, @avatarUrl, @pinHash, @isKids, @sortOrder, @createdAt)`
-      ),
-      setActiveProfile: db.prepare(
-        'UPDATE households SET active_profile_id = ? WHERE id = ? AND active_profile_id IS NOT ?'
-      ),
-      getProfile: db.prepare('SELECT * FROM profiles WHERE id = ? AND household_id = ?'),
-      listProfiles: db.prepare(
-        'SELECT * FROM profiles WHERE household_id = ? ORDER BY sort_order ASC, created_at ASC'
-      ),
-      nextSortOrder: db.prepare(
-        'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM profiles WHERE household_id = ?'
-      ),
-      updateProfile: db.prepare(
-        `UPDATE profiles SET name = @name, avatar_url = @avatarUrl, pin_hash = @pinHash,
-           is_kids = @isKids, sort_order = @sortOrder
-         WHERE id = @id AND household_id = @householdId`
-      ),
-      deleteProfile: db.prepare('DELETE FROM profiles WHERE id = ? AND household_id = ?'),
-      clearActiveProfileIfDeleted: db.prepare(
-        'UPDATE households SET active_profile_id = NULL WHERE id = ? AND active_profile_id = ?'
-      ),
-      setSortOrder: db.prepare(
-        'UPDATE profiles SET sort_order = ? WHERE id = ? AND household_id = ?'
-      ),
-    };
   }
 
-  createHousehold() {
+  async createHousehold() {
     const id = generateHouseholdToken();
-    this.stmts.insertHousehold.run(id, Date.now());
+    await this.db
+      .prepare('INSERT INTO households (id, created_at, active_profile_id) VALUES (?, ?, NULL)')
+      .bind(id, Date.now())
+      .run();
     return id;
   }
 
-  getHousehold(id) {
-    return this.stmts.getHousehold.get(id);
+  async getHousehold(id) {
+    return this.db.prepare('SELECT * FROM households WHERE id = ?').bind(id).first();
   }
 
-  listProfiles(householdId) {
-    return this.stmts.listProfiles.all(householdId);
+  async listProfiles(householdId) {
+    const { results } = await this.db
+      .prepare(
+        'SELECT * FROM profiles WHERE household_id = ? ORDER BY sort_order ASC, created_at ASC'
+      )
+      .bind(householdId)
+      .all();
+    return results ?? [];
   }
 
-  getProfile(householdId, profileId) {
-    return this.stmts.getProfile.get(profileId, householdId);
+  async getProfile(householdId, profileId) {
+    return this.db
+      .prepare('SELECT * FROM profiles WHERE id = ? AND household_id = ?')
+      .bind(profileId, householdId)
+      .first();
   }
 
-  createProfile(householdId, { name, avatarUrl = null, pinHash = null, isKids = false }) {
-    const household = this.getHousehold(householdId);
+  async createProfile(householdId, { name, avatarUrl = null, pinHash = null, isKids = false }) {
+    const household = await this.getHousehold(householdId);
     if (!household) {
       throw new HouseholdNotFoundError(householdId);
     }
-    const { n } = this.stmts.countProfiles.get(householdId);
-    if (n >= MAX_PROFILES_PER_HOUSEHOLD) {
+    const countRow = await this.db
+      .prepare('SELECT COUNT(*) AS n FROM profiles WHERE household_id = ?')
+      .bind(householdId)
+      .first();
+    if ((countRow?.n ?? 0) >= MAX_PROFILES_PER_HOUSEHOLD) {
       throw new ProfileLimitError(householdId);
     }
-    const { next } = this.stmts.nextSortOrder.get(householdId);
+    const nextRow = await this.db
+      .prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM profiles WHERE household_id = ?')
+      .bind(householdId)
+      .first();
+
     const id = generateId();
-    this.stmts.insertProfile.run({
-      id,
-      householdId,
-      name,
-      avatarUrl,
-      pinHash,
-      isKids: isKids ? 1 : 0,
-      sortOrder: next,
-      createdAt: Date.now(),
-    });
+    await this.db
+      .prepare(
+        `INSERT INTO profiles (id, household_id, name, avatar_url, pin_hash, is_kids, sort_order, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        id,
+        householdId,
+        name,
+        avatarUrl,
+        pinHash,
+        isKids ? 1 : 0,
+        nextRow?.next ?? 0,
+        Date.now()
+      )
+      .run();
     return this.getProfile(householdId, id);
   }
 
-  // Atomic switch: single UPDATE, WAL-durable. Returns true if it changed anything.
-  setActiveProfile(householdId, profileId) {
-    const result = this.stmts.setActiveProfile.run(profileId, householdId, profileId);
-    return result.changes > 0;
+  // Atomic switch: still a single UPDATE. Returns true if it changed anything.
+  async setActiveProfile(householdId, profileId) {
+    const result = await this.db
+      .prepare(
+        'UPDATE households SET active_profile_id = ? WHERE id = ? AND active_profile_id IS NOT ?'
+      )
+      .bind(profileId, householdId, profileId)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
   }
 
-  updateProfile(householdId, profileId, { name, avatarUrl, pinHash, isKids, sortOrder }) {
-    const existing = this.getProfile(householdId, profileId);
+  async updateProfile(householdId, profileId, { name, avatarUrl, pinHash, isKids, sortOrder }) {
+    const existing = await this.getProfile(householdId, profileId);
     if (!existing) {
       throw new ProfileNotFoundError(profileId);
     }
-    this.stmts.updateProfile.run({
-      id: profileId,
-      householdId,
-      name: name ?? existing.name,
-      avatarUrl: avatarUrl === undefined ? existing.avatar_url : avatarUrl,
-      pinHash: pinHash === undefined ? existing.pin_hash : pinHash,
-      isKids: (isKids ?? Boolean(existing.is_kids)) ? 1 : 0,
-      sortOrder: sortOrder ?? existing.sort_order,
-    });
+    await this.db
+      .prepare(
+        `UPDATE profiles SET name = ?, avatar_url = ?, pin_hash = ?, is_kids = ?, sort_order = ?
+         WHERE id = ? AND household_id = ?`
+      )
+      .bind(
+        name ?? existing.name,
+        avatarUrl === undefined ? existing.avatar_url : avatarUrl,
+        pinHash === undefined ? existing.pin_hash : pinHash,
+        (isKids ?? Boolean(existing.is_kids)) ? 1 : 0,
+        sortOrder ?? existing.sort_order,
+        profileId,
+        householdId
+      )
+      .run();
     return this.getProfile(householdId, profileId);
   }
 
-  deleteProfile(householdId, profileId) {
-    const result = this.stmts.deleteProfile.run(profileId, householdId);
-    if (result.changes === 0) {
+  async deleteProfile(householdId, profileId) {
+    const result = await this.db
+      .prepare('DELETE FROM profiles WHERE id = ? AND household_id = ?')
+      .bind(profileId, householdId)
+      .run();
+    if ((result.meta?.changes ?? 0) === 0) {
       throw new ProfileNotFoundError(profileId);
     }
-    this.stmts.clearActiveProfileIfDeleted.run(householdId, profileId);
+    await this.db
+      .prepare('UPDATE households SET active_profile_id = NULL WHERE id = ? AND active_profile_id = ?')
+      .bind(householdId, profileId)
+      .run();
   }
 
-  // Applies a full ordering to profiles in one transaction; ids not belonging
-  // to the household are ignored.
-  reorderProfiles(householdId, orderedProfileIds) {
-    const apply = this.db.transaction((ids) => {
-      ids.forEach((profileId, index) => {
-        this.stmts.setSortOrder.run(index, profileId, householdId);
-      });
-    });
-    apply(orderedProfileIds);
+  // Applies a full ordering in one D1 batch. D1 has no interactive
+  // transactions (no db.transaction(fn) like better-sqlite3), but batch() runs
+  // its statements atomically in a single implicit transaction — same
+  // all-or-nothing guarantee. Ids not belonging to the household are ignored
+  // by the WHERE clause, exactly as before.
+  async reorderProfiles(householdId, orderedProfileIds) {
+    if (orderedProfileIds.length > 0) {
+      const statement = this.db.prepare(
+        'UPDATE profiles SET sort_order = ? WHERE id = ? AND household_id = ?'
+      );
+      await this.db.batch(
+        orderedProfileIds.map((profileId, index) =>
+          statement.bind(index, profileId, householdId)
+        )
+      );
+    }
     return this.listProfiles(householdId);
   }
 }

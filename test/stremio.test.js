@@ -1,124 +1,54 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { buildApp } from '../src/app.js';
+import { SELF } from 'cloudflare:test';
+import { describe, it, expect } from 'vitest';
+import { url, createHouseholdWithProfile, PNG_MAGIC, toHex } from './helpers.js';
+import { PROFILE_ID_PREFIX } from '../src/lib/manifest.js';
 
-function makeApp() {
-  return buildApp({ dbPath: ':memory:', logger: false });
-}
+describe('stremio catalog/meta/stream/poster', () => {
+  it('catalog lists one meta card per profile with a poster URL', async () => {
+    const { token, profile } = await createHouseholdWithProfile();
 
-async function createHouseholdWithProfile(app, payload = { name: 'Alice' }) {
-  const householdRes = await app.inject({ method: 'POST', url: '/api/households' });
-  const { token } = householdRes.json();
-  const profileRes = await app.inject({
-    method: 'POST',
-    url: `/${token}/profiles`,
-    payload,
-  });
-  return { token, profile: profileRes.json() };
-}
-
-test('catalog lists one meta card per profile with a poster URL', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-  const { token, profile } = await createHouseholdWithProfile(app);
-
-  const res = await app.inject({
-    method: 'GET',
-    url: `/${token}/catalog/other/switchboard-profiles.json`,
-  });
-  assert.equal(res.statusCode, 200);
-  const { metas } = res.json();
-  assert.equal(metas.length, 1);
-  assert.equal(metas[0].id, `switchboard:profile:${profile.id}`);
-  assert.equal(metas[0].posterShape, 'square');
-  assert.match(metas[0].poster, new RegExp(`/${token}/poster/${profile.id}\\.png$`));
-});
-
-test('unknown catalog id 404s', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-  const { token } = await createHouseholdWithProfile(app);
-
-  const res = await app.inject({ method: 'GET', url: `/${token}/catalog/other/bogus.json` });
-  assert.equal(res.statusCode, 404);
-});
-
-test('meta and stream resolve a profile switch id', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-  const { token, profile } = await createHouseholdWithProfile(app);
-  const id = `switchboard:profile:${profile.id}`;
-
-  const metaRes = await app.inject({ method: 'GET', url: `/${token}/meta/other/${id}.json` });
-  assert.equal(metaRes.statusCode, 200);
-  assert.equal(metaRes.json().meta.id, id);
-
-  const streamRes = await app.inject({ method: 'GET', url: `/${token}/stream/other/${id}.json` });
-  assert.equal(streamRes.statusCode, 200);
-  const { streams } = streamRes.json();
-  assert.equal(streams.length, 1);
-  assert.match(streams[0].externalUrl, new RegExp(`/${token}/switch/${profile.id}$`));
-});
-
-test('poster route returns a PNG', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-  const { token, profile } = await createHouseholdWithProfile(app);
-
-  const res = await app.inject({ method: 'GET', url: `/${token}/poster/${profile.id}.png` });
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.headers['content-type'], 'image/png');
-  // PNG magic bytes
-  assert.equal(res.rawPayload.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-});
-
-test('switch confirmation page switches immediately when no PIN is set', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-  const { token, profile } = await createHouseholdWithProfile(app);
-
-  const res = await app.inject({ method: 'GET', url: `/${token}/switch/${profile.id}` });
-  assert.equal(res.statusCode, 200);
-  assert.match(res.payload, /Switched to Alice/);
-  assert.match(res.payload, /stremio:\/\/board/);
-
-  const listRes = await app.inject({ method: 'GET', url: `/${token}/profiles` });
-  assert.equal(listRes.json().profiles[0].isActive, true);
-});
-
-test('switch confirmation page requires a PIN and blocks the wrong one', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-  const { token, profile } = await createHouseholdWithProfile(app, {
-    name: 'Kiddo',
-    isKids: true,
-    pin: '4242',
+    const res = await SELF.fetch(url(`/${token}/catalog/other/multiprofile-profiles.json`));
+    expect(res.status).toBe(200);
+    const { metas } = await res.json();
+    expect(metas.length).toBe(1);
+    expect(metas[0].id).toBe(`${PROFILE_ID_PREFIX}${profile.id}`);
+    expect(metas[0].posterShape).toBe('square');
+    expect(metas[0].poster).toMatch(new RegExp(`/${token}/poster/${profile.id}`));
   });
 
-  const getRes = await app.inject({ method: 'GET', url: `/${token}/switch/${profile.id}` });
-  assert.match(getRes.payload, /Enter PIN/);
-
-  const wrongPost = await app.inject({
-    method: 'POST',
-    url: `/${token}/switch/${profile.id}`,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    payload: 'pin=0000',
+  it('an unknown catalog id 404s', async () => {
+    const { token } = await createHouseholdWithProfile();
+    const res = await SELF.fetch(url(`/${token}/catalog/other/bogus.json`));
+    expect(res.status).toBe(404);
   });
-  assert.equal(wrongPost.statusCode, 401);
-  assert.match(wrongPost.payload, /Incorrect PIN/);
 
-  const listAfterWrong = await app.inject({ method: 'GET', url: `/${token}/profiles` });
-  assert.equal(listAfterWrong.json().profiles[0].isActive, false);
+  it('meta and stream resolve a profile-switch id', async () => {
+    const { token, profile } = await createHouseholdWithProfile();
+    const id = `${PROFILE_ID_PREFIX}${profile.id}`;
 
-  const rightPost = await app.inject({
-    method: 'POST',
-    url: `/${token}/switch/${profile.id}`,
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    payload: 'pin=4242',
+    const metaRes = await SELF.fetch(url(`/${token}/meta/other/${id}.json`));
+    expect(metaRes.status).toBe(200);
+    expect((await metaRes.json()).meta.id).toBe(id);
+
+    const streamRes = await SELF.fetch(url(`/${token}/stream/other/${id}.json`));
+    expect(streamRes.status).toBe(200);
+    const { streams } = await streamRes.json();
+    expect(streams.length).toBe(1);
+    expect(streams[0].externalUrl).toMatch(new RegExp(`/${token}/switch/${profile.id}$`));
   });
-  assert.equal(rightPost.statusCode, 200);
-  assert.match(rightPost.payload, /Switched to Kiddo/);
 
-  const listAfterRight = await app.inject({ method: 'GET', url: `/${token}/profiles` });
-  assert.equal(listAfterRight.json().profiles[0].isActive, true);
+  it('the poster route returns a PNG', async () => {
+    const { token, profile } = await createHouseholdWithProfile();
+    const res = await SELF.fetch(url(`/${token}/poster/${profile.id}`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(toHex(await res.arrayBuffer())).toBe(PNG_MAGIC);
+  });
+
+  it('an emoji-avatar profile still renders a valid PNG poster', async () => {
+    const { token, profile } = await createHouseholdWithProfile({ name: 'Kiddo', avatarUrl: '🦄' });
+    const res = await SELF.fetch(url(`/${token}/poster/${profile.id}`));
+    expect(res.status).toBe(200);
+    expect(toHex(await res.arrayBuffer())).toBe(PNG_MAGIC);
+  });
 });

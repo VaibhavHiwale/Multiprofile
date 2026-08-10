@@ -1,4 +1,5 @@
 import { escapeHtml } from './html.js';
+import { ADDON_NAME } from './manifest.js';
 
 const BASE_STYLE = `
   body { font-family: system-ui, sans-serif; background: #111; color: #eee;
@@ -13,10 +14,12 @@ const BASE_STYLE = `
   .error { color: #e0507b; font-size: 0.9rem; }
 `;
 
+// The PIN is submitted through a real HTML form POST, never a PIN-in-query
+// -string GET, so it can't land in access logs or browser history.
 export function renderPinForm({ token, profileId, name, error = null }) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Switch to ${escapeHtml(name)}</title><style>${BASE_STYLE}</style></head>
+<title>Switch to ${escapeHtml(name)} — ${ADDON_NAME}</title><style>${BASE_STYLE}</style></head>
 <body><main>
   <h1>Enter PIN for ${escapeHtml(name)}</h1>
   ${error ? `<p class="error">${escapeHtml(error)}</p>` : '<p>This profile is PIN-protected.</p>'}
@@ -27,10 +30,13 @@ export function renderPinForm({ token, profileId, name, error = null }) {
 </main></body></html>`;
 }
 
+// design.md §2: the stremio:// deep link is known to silently fail on macOS
+// (Stremio/stremio-bugs#2466, #2484). The manual button is therefore the
+// primary path and the auto-redirect is the enhancement — not the reverse.
 export function renderSwitchConfirmation({ name }) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Switched to ${escapeHtml(name)}</title><style>${BASE_STYLE}</style>
+<title>Switched to ${escapeHtml(name)} — ${ADDON_NAME}</title><style>${BASE_STYLE}</style>
 <script>setTimeout(function () { window.location.href = 'stremio://board'; }, 400);</script>
 </head>
 <body><main>

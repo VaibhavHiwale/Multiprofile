@@ -1,80 +1,39 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { buildApp } from '../src/app.js';
+import { SELF } from 'cloudflare:test';
+import { describe, it, expect } from 'vitest';
+import { url, createHousehold, createHouseholdWithActiveProfile, toHex } from './helpers.js';
 
-function makeApp() {
-  return buildApp({ dbPath: ':memory:', logger: false });
-}
+describe('/configure dashboard, stats, QR', () => {
+  it('renders for a known household and 404s for an unknown one', async () => {
+    const token = await createHousehold();
 
-async function createHousehold(app) {
-  const res = await app.inject({ method: 'POST', url: '/api/households' });
-  return res.json().token;
-}
+    const ok = await SELF.fetch(url(`/${token}/configure`));
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get('content-type')).toMatch(/text\/html/);
+    expect(await ok.text()).toMatch(/MultiProfile/);
 
-test('configure page renders for a known household and 404s for an unknown one', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-  const token = await createHousehold(app);
-
-  const ok = await app.inject({ method: 'GET', url: `/${token}/configure` });
-  assert.equal(ok.statusCode, 200);
-  assert.match(ok.headers['content-type'], /text\/html/);
-  assert.match(ok.payload, /Switchboard/);
-
-  const missing = await app.inject({ method: 'GET', url: `/${'a'.repeat(32)}/configure` });
-  assert.equal(missing.statusCode, 404);
-});
-
-test('qrcode.png returns a PNG encoding the manifest URL', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-  const token = await createHousehold(app);
-
-  const res = await app.inject({ method: 'GET', url: `/${token}/qrcode.png` });
-  assert.equal(res.statusCode, 200);
-  assert.equal(res.headers['content-type'], 'image/png');
-  assert.equal(res.rawPayload.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
-});
-
-test('stats reports distinct titles watched per profile', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-  const token = await createHousehold(app);
-
-  const profileRes = await app.inject({
-    method: 'POST',
-    url: `/${token}/profiles`,
-    payload: { name: 'Alice' },
+    const missing = await SELF.fetch(url(`/${'a'.repeat(32)}/configure`));
+    expect(missing.status).toBe(404);
   });
-  const profile = profileRes.json();
-  await app.inject({ method: 'POST', url: `/${token}/profiles/${profile.id}/switch` });
 
-  t.mock.method(globalThis, 'fetch', async () => ({ ok: true, json: async () => ({ meta: null }) }));
-  await app.inject({ method: 'GET', url: `/${token}/stream/movie/tt0111161.json` });
-  await app.inject({ method: 'GET', url: `/${token}/stream/movie/tt0068646.json` });
-
-  const statsRes = await app.inject({ method: 'GET', url: `/${token}/stats` });
-  assert.equal(statsRes.statusCode, 200);
-  const { stats } = statsRes.json();
-  assert.equal(stats.length, 1);
-  assert.equal(stats[0].profileId, profile.id);
-  assert.equal(stats[0].titlesWatched, 2);
-});
-
-test('an emoji avatar renders as the poster glyph', async (t) => {
-  const app = makeApp();
-  t.after(() => app.close());
-  const token = await createHousehold(app);
-
-  const profileRes = await app.inject({
-    method: 'POST',
-    url: `/${token}/profiles`,
-    payload: { name: 'Kiddo', avatarUrl: '🦄' },
+  it('qrcode.png returns a PNG', async () => {
+    const token = await createHousehold();
+    const res = await SELF.fetch(url(`/${token}/qrcode.png`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toBe('image/png');
+    expect(toHex(await res.arrayBuffer())).toBe('89504e470d0a1a0a');
   });
-  const profile = profileRes.json();
-  assert.equal(profile.avatarUrl, '🦄');
 
-  const posterRes = await app.inject({ method: 'GET', url: `/${token}/poster/${profile.id}.png` });
-  assert.equal(posterRes.statusCode, 200);
-  assert.equal(posterRes.headers['content-type'], 'image/png');
+  it('stats reports distinct titles watched per profile', async () => {
+    const { token, profile } = await createHouseholdWithActiveProfile();
+
+    await SELF.fetch(url(`/${token}/stream/movie/tt0111161.json`));
+    await SELF.fetch(url(`/${token}/stream/movie/tt0068646.json`));
+
+    const statsRes = await SELF.fetch(url(`/${token}/stats`));
+    expect(statsRes.status).toBe(200);
+    const { stats } = await statsRes.json();
+    expect(stats.length).toBe(1);
+    expect(stats[0].profileId).toBe(profile.id);
+    expect(stats[0].titlesWatched).toBe(2);
+  });
 });

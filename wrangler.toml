@@ -1,0 +1,64 @@
+#: MultiProfile — Cloudflare Workers deployment config.
+#
+# NOTHING in this file requires a Cloudflare account to run *locally*:
+# `npm run dev` (wrangler dev --local) and `npm test`
+# (@cloudflare/vitest-pool-workers) simulate D1, R2, Durable Objects and Cron
+# Triggers entirely on-disk via Miniflare.
+#
+# To go live, a human needs to fill in the two placeholders marked
+# REPLACE_ME below — see docs/PROGRESS.md § "How to actually deploy".
+
+name = "multiprofile"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+# Workers logs / traces. Free-plan safe.
+[observability]
+enabled = true
+
+# ---------------------------------------------------------------------------
+# D1 — replaces the better-sqlite3 file database.
+# Create with:  wrangler d1 create multiprofile-db
+# then paste the printed database_id over REPLACE_ME_WITH_REAL_D1_DATABASE_ID.
+# ---------------------------------------------------------------------------
+[[d1_databases]]
+binding = "DB"
+database_name = "multiprofile-db"
+database_id = "276f251f-ef25-44b4-b5d8-884bd815e040"
+migrations_dir = "migrations"
+
+# ---------------------------------------------------------------------------
+# R2 — holds generated poster PNGs (cache) and the weekly error rollups that
+# the Node build used to write to ./data/error-rollups/.
+# Create with:  wrangler r2 bucket create multiprofile-assets
+# ---------------------------------------------------------------------------
+[[r2_buckets]]
+binding = "ASSETS_BUCKET"
+bucket_name = "multiprofile-assets"
+
+# ---------------------------------------------------------------------------
+# Durable Object — replaces the in-memory Map rate limiter. One instance per
+# household token, so the fixed set of counters is coordinated across every
+# edge location instead of living per-isolate.
+# ---------------------------------------------------------------------------
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RateLimiter"]
+
+# ---------------------------------------------------------------------------
+# Cron Trigger — replaces `npm run rollup:errors` + the nightly maintenance
+# setInterval. Mondays 04:00 UTC: summarise the last 7 days of error_events
+# into R2 at error-rollups/<ISO-week>.md.
+# ---------------------------------------------------------------------------
+[triggers]
+crons = ["0 4 * * 1"]
+
+# Fonts are imported as raw ArrayBuffers for satori (see src/lib/fonts.js).
+[[rules]]
+type = "Data"
+globs = ["**/*.ttf"]
+fallthrough = true

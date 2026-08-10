@@ -1,9 +1,214 @@
-# Switchboard — build progress & resume notes
+# MultiProfile (formerly Switchboard) — build progress & resume notes
 
 Read this first if you're picking the project back up. It tracks what's
 actually done (verified by tests, not just written), what's in flight, and
 the exact next step. The full spec lives in `docs/design.md` — this file is
 the status layer on top of it.
+
+## Cost & limits (read this if you're worried about being charged)
+
+Verified directly against Cloudflare's pricing pages, not assumed:
+[Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/),
+[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/),
+[R2 pricing](https://developers.cloudflare.com/r2/pricing/).
+
+**The short version: Workers and D1, on the Free plan, cannot bill you at
+all — they just stop serving requests if you exceed the free tier. R2 is
+the only product here that can actually charge money, and only past a
+free allowance generous enough that normal household use won't come close.**
+
+### Why Workers/D1 are structurally safe on the Free plan
+
+Overage *pricing* for D1 (rows read/written past the free tier) and Workers
+(requests past 100K/day) is explicitly a **Workers Paid plan** ($5/mo
+baseline) feature. On the Workers **Free** plan — which this project is on
+unless someone deliberately upgrades it — there is no metered billing path
+for these at all. Exceeding the free tier just means requests start
+failing (D1 queries error, Worker invocations get rejected) rather than an
+invisible charge appearing. Free-plan limits, for reference:
+
+| Product | Free tier | What happens past it (Free plan) |
+|---|---|---|
+| Workers | 100,000 requests/day | Requests get rejected |
+| D1 | 5 GB storage, 5M rows read/day, 100K rows written/day | Queries error |
+
+A household-scale addon (a few people checking Stremio a few times a day)
+uses a vanishingly small fraction of these — the numbers above are sized
+for real production traffic, not a family's viewing habits.
+
+### R2 — the one product that can actually cost money
+
+R2 bills from the first byte past its free tier regardless of Workers
+plan, which is why Cloudflare required a card on file just to enable it.
+Free tier, then overage rate once exceeded:
+
+| | Free / month | Overage rate |
+|---|---|---|
+| Storage | 10 GB-month | $0.015 / GB-month |
+| Class A ops (writes/lists) | 1,000,000 | $4.50 / million |
+| Class B ops (reads) | 10,000,000 | $0.36 / million |
+| Egress | Unlimited, always free | — |
+
+Cloudflare rounds usage up to the next whole billing unit (e.g.
+1,000,001 ops bills as 2 million).
+
+**Where this codebase actually touches R2**, and why it's bounded:
+
+- `src/routes/stremio.js`'s poster route (`GET /:token/poster/:profileId`):
+  one Class B read per request (cache check), and — critically — a Class A
+  write **only on a cache miss**. The R2 object key is a content hash of
+  `(profile id, name, avatar_url, isActive, is_kids)`
+  (`posterCacheKey`), so each profile has **at most 2 stable cached
+  variants** (active/inactive) that, once rendered, are reused forever
+  until the profile's name/avatar/kids-flag actually changes. This is not
+  "one write per request" — it's bounded by how often profiles are edited,
+  which is rare.
+- The weekly Cron Trigger rollup (`src/lib/rollup.js`): one Class A write,
+  once a week. Negligible.
+- Storage: generated poster PNGs and rollup markdown files are tiny (a few
+  KB each); 10 GB free is enormous headroom at this scale.
+
+**The one real gap this surfaced, and the fix applied:** `POST
+/api/households` was completely unrate-limited. Every *other* mutating
+route is rate-limited per household token (`src/routes/profiles.js`), but
+an attacker could sidestep every one of those limits by simply minting a
+fresh token per request — unbounded token creation → unbounded profiles →
+unbounded D1 writes and, via the poster cache-miss path, unbounded R2
+Class A operations. Fixed in `src/app.js`: household creation is now
+rate-limited to 20/hour **per client IP** (via `cf-connecting-ip`, reusing
+the same `RateLimiter` Durable Object), tested in
+`test/rateLimiter.test.js`. 20/hour comfortably covers real use (creating
+households for family/friends) while making mass token-minting
+impractically slow.
+
+### What to actually do about it
+
+Code-level guardrails reduce *how* the free tier could be exceeded, but the
+authoritative, zero-maintenance safety net is Cloudflare's own usage
+tracking, not anything this app can self-meter reliably. **Recommended:**
+in the dashboard, go to **Notifications → Add** and set up a billing/usage
+alert (Cloudflare supports alerting on approaching R2 usage thresholds).
+That way you get warned by Cloudflare directly, from the authoritative
+billing source, well before any charge — rather than trusting an
+in-app estimate.
+
+## ✅ Cloudflare Workers migration: deployed and live
+
+Everything below the next section describes the **Node.js/Fastify build**,
+which is complete, tested (40 tests), and lives on `main`. **`main` is
+untouched and still reflects that working Node.js state.**
+
+A migration to **Cloudflare Workers + D1 + R2** (Hono replacing Fastify, D1
+replacing better-sqlite3, `@noble/hashes` argon2id replacing native
+`argon2`, `@cf-wasm/satori`+`@cf-wasm/resvg` replacing `@napi-rs/canvas`,
+Durable Objects replacing the in-memory rate limiter, Cron Triggers
+replacing `setInterval`, D1's point-in-time recovery replacing the custom
+backup job) is on the `cloudflare-workers-migration` branch, pushed to
+`origin`.
+
+**Status: locally verified AND deployed live.** `npm run lint` clean,
+`npm test` passes **43/43 tests** (exceeding the Node build's 40) across 12
+test files — households/profiles repo + HTTP CRUD, PIN gate + atomic
+switch, the profile-switcher catalog/meta/stream/poster routes, the switch
+confirmation page (PIN form, wrong/right PIN), watch-event logging +
+dedupe (including the NULL-safe season/episode upsert), continue-watching,
+because-you-watched recommendations, D1-backed error logging + the
+R2-backed weekly rollup, the `/configure` dashboard + stats + QR code, and
+the rate-limiter Durable Object (direct, end-to-end on profile mutations,
+and end-to-end on household creation).
+
+**Live URL: `https://multiprofile.vaibhavhiwale.workers.dev`** — real D1
+database (`multiprofile-db`) and R2 bucket (`multiprofile-assets`)
+provisioned on the project owner's Cloudflare account, schema migration
+applied to the remote database, `wrangler deploy` succeeded, and a full
+smoke test against the live URL passed: household creation, profile
+creation (including an emoji avatar verified to round-trip correctly as
+real UTF-8 — an initial curl-based check showed `??` instead of the emoji,
+traced to Git Bash's shell mangling a literal emoji typed on the command
+line, *not* a server bug; confirmed by re-testing with Node's `fetch`,
+which bypasses the shell entirely), poster PNG generation, the
+profile-switcher catalog, the switch confirmation page, the `/configure`
+dashboard, and the QR code endpoint all returned correct responses from
+the real deployment.
+
+**Not yet done:** merging `cloudflare-workers-migration` into `main` (needs
+the project owner's explicit sign-off — see "What's left" below), pointing
+`docs/index.html` at the live URL, enabling GitHub Pages, and the
+cross-platform acceptance pass on real Stremio clients.
+
+### How this got here (context if you're confused by the history)
+
+1. A background agent wrote most of this code, but was terminated mid-task
+   by the Claude account's monthly spend limit before running a single
+   test — and everything it had written was sitting **uncommitted**. It was
+   committed as a WIP safety-checkpoint commit (`git log` on this branch)
+   purely to prevent loss, not as a "this works" milestone.
+2. At that point `npm test` failed before running a single test: Miniflare
+   couldn't resolve `unicode-trie/swap`, a transitive dependency of
+   satori's line-breaking (`linebreak`) package. Diagnosis: `swap.js` is
+   genuinely pure JS with zero Node APIs — the failure was Vite's SSR dep
+   optimizer not pre-bundling deep transitive CJS dependencies it wasn't
+   explicitly told about (a documented
+   [Cloudflare Workers Vitest known-issue](https://developers.cloudflare.com/workers/testing/vitest-integration/known-issues/#module-resolution)).
+   Fixed by listing every problem package explicitly in
+   `vitest.config.js`'s `deps.optimizer.ssr.include` — first `unicode-trie`
+   itself, then (as each subsequent failure surfaced one at a time)
+   `postcss-value-parser` and satori's other direct dependencies, and
+   finally the exact deep-subpath specifier `qrcode/lib/core/qrcode.js`
+   that `src/lib/qrcode.js` actually imports (the bare `qrcode` package
+   name in the include list wasn't enough — Vite needs the literal
+   specifier used in code for deep subpath imports).
+3. With module resolution fixed, the app booted but had almost no test
+   coverage (`test/app.test.js` only — the rest of the original 40 Node
+   tests had been deleted and not yet replaced). All 12 test files above
+   were then written and verified against the real implementation.
+4. Also fixed along the way: `eslint.config.js` still listed Node globals
+   instead of Workers/`workerd` globals; `src/lib/errorLog.js` was dead
+   code orphaned by the D1-backed `src/db/errorEvents.js` replacement
+   (deleted); `assets/fonts/LICENSE.txt` was referenced by a comment in
+   `src/lib/fonts.js` but didn't exist (added — Roboto is Apache-2.0 and
+   is redistributed in this repo as a font asset for poster generation).
+
+### What's left
+
+Provisioning and deploy are done (see the log below). What remains:
+
+1. **Point `docs/index.html` at the live URL** (the GitHub Pages
+   installer) — either hardcode it as the default in the "Switchboard
+   service URL" field or leave it user-entered; either is fine, just needs
+   a decision.
+2. **Enable GitHub Pages** on the repo (Settings → Pages → `main` /
+   `/docs`) so the installer above is actually reachable.
+3. **Merge `cloudflare-workers-migration` into `main`** — needs the
+   project owner's explicit sign-off, not something to do unprompted even
+   though the branch is verified working. `main`'s Node.js build remains
+   the last fully-shipped state until this happens.
+4. **Cross-platform acceptance pass** on real Stremio clients (Desktop,
+   Android, iOS Safari, Android TV) — cannot be done by an agent, needs
+   physical/real devices.
+5. Optional: set up the Cloudflare-side usage/billing alert mentioned in
+   "Cost & limits" above (Notifications → Add in the dashboard).
+
+### Provisioning/deploy log (for reference)
+
+- `wrangler d1 create multiprofile-db` → database id
+  `276f251f-ef25-44b4-b5d8-884bd815e040`, filled into `wrangler.toml`.
+- `wrangler d1 migrations apply multiprofile-db --remote` → applied
+  `0001_initial_schema.sql`, all 5 tables confirmed present via
+  `wrangler d1 execute ... --command "SELECT name FROM sqlite_master..."`.
+- `wrangler r2 bucket create multiprofile-assets` → required enabling R2
+  through the dashboard first (a one-time, per-account manual step;
+  `wrangler`/API tokens cannot do this on their own — R2 has its own
+  terms-of-service acceptance flow).
+- `wrangler deploy` → required registering a `workers.dev` subdomain
+  through the dashboard first (same category of one-time manual step).
+  The account subdomain (`vaibhavhiwale`) is **account-wide, not
+  per-project** — every future Worker on this account automatically gets
+  `<worker-name>.vaibhavhiwale.workers.dev` with no further setup.
+- Deployed URL: `https://multiprofile.vaibhavhiwale.workers.dev`. Took a
+  couple of minutes after the first successful deploy for DNS/TLS to
+  actually route (expected — Cloudflare's own deploy output says as much).
+- Full smoke test against the live URL passed (see above).
 
 ## How to resume
 

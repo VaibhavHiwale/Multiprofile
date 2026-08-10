@@ -1,78 +1,36 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { buildApp } from '../src/app.js';
-import { clearCinemetaCache } from '../src/lib/cinemeta.js';
+import { SELF } from 'cloudflare:test';
+import { describe, it, expect } from 'vitest';
+import { url, createHouseholdWithActiveProfile, stubCinemeta } from './helpers.js';
 
-function stubCinemeta(t, { metaByKey = {}, catalogByKey = {} }) {
-  return t.mock.method(globalThis, 'fetch', async (url) => {
-    const str = String(url);
-    const metaMatch = /\/meta\/(movie|series)\/(tt\d+)\.json$/.exec(str);
-    if (metaMatch) {
-      const meta = metaByKey[`${metaMatch[1]}:${metaMatch[2]}`];
-      return meta ? { ok: true, json: async () => ({ meta }) } : { ok: false };
-    }
-    const catalogMatch = /\/catalog\/(movie|series)\/top\/genre=([^.]+)\.json$/.exec(str);
-    if (catalogMatch) {
-      const key = `${catalogMatch[1]}:${decodeURIComponent(catalogMatch[2])}`;
-      const metas = catalogByKey[key];
-      return metas ? { ok: true, json: async () => ({ metas }) } : { ok: true, json: async () => ({ metas: [] }) };
-    }
-    return { ok: false };
-  });
-}
+describe('because-you-watched recommendations', () => {
+  it('recommends titles from the top genre, excluding already-watched titles', async () => {
+    stubCinemeta({
+      metaByKey: { 'movie:tt0111161': { name: 'The Shawshank Redemption', genres: ['Drama'] } },
+      catalogByKey: {
+        'movie:Drama': [
+          { id: 'tt0111161', type: 'movie', name: 'The Shawshank Redemption' }, // already watched
+          { id: 'tt0068646', type: 'movie', name: 'The Godfather' },
+        ],
+      },
+    });
+    const { token } = await createHouseholdWithActiveProfile();
 
-async function setupActiveProfile(app) {
-  const householdRes = await app.inject({ method: 'POST', url: '/api/households' });
-  const { token } = householdRes.json();
-  const profileRes = await app.inject({
-    method: 'POST',
-    url: `/${token}/profiles`,
-    payload: { name: 'Alice' },
-  });
-  const profile = profileRes.json();
-  await app.inject({ method: 'POST', url: `/${token}/profiles/${profile.id}/switch` });
-  return { token, profile };
-}
+    await SELF.fetch(url(`/${token}/stream/movie/tt0111161.json`));
 
-test('recommends titles from the profile\'s top genre, excluding already-watched titles', async (t) => {
-  clearCinemetaCache();
-  const app = buildApp({ dbPath: ':memory:', logger: false });
-  t.after(() => app.close());
-  const { token } = await setupActiveProfile(app);
-
-  stubCinemeta(t, {
-    metaByKey: {
-      'movie:tt0111161': { name: 'The Shawshank Redemption', genres: ['Drama'] },
-    },
-    catalogByKey: {
-      'movie:Drama': [
-        { id: 'tt0111161', type: 'movie', name: 'The Shawshank Redemption' }, // already watched
-        { id: 'tt0068646', type: 'movie', name: 'The Godfather' },
-      ],
-    },
+    const res = await SELF.fetch(
+      url(`/${token}/catalog/movie/multiprofile-because-you-watched.json`)
+    );
+    expect(res.status).toBe(200);
+    const { metas } = await res.json();
+    expect(metas.length).toBe(1);
+    expect(metas[0].id).toBe('tt0068646');
   });
 
-  await app.inject({ method: 'GET', url: `/${token}/stream/movie/tt0111161.json` });
-
-  const res = await app.inject({
-    method: 'GET',
-    url: `/${token}/catalog/movie/switchboard-because-you-watched.json`,
+  it('is empty with no watch history', async () => {
+    const { token } = await createHouseholdWithActiveProfile();
+    const res = await SELF.fetch(
+      url(`/${token}/catalog/movie/multiprofile-because-you-watched.json`)
+    );
+    expect(await res.json()).toEqual({ metas: [] });
   });
-  assert.equal(res.statusCode, 200);
-  const { metas } = res.json();
-  assert.equal(metas.length, 1);
-  assert.equal(metas[0].id, 'tt0068646');
-});
-
-test('recommendation row is empty with no watch history', async (t) => {
-  clearCinemetaCache();
-  const app = buildApp({ dbPath: ':memory:', logger: false });
-  t.after(() => app.close());
-  const { token } = await setupActiveProfile(app);
-
-  const res = await app.inject({
-    method: 'GET',
-    url: `/${token}/catalog/movie/switchboard-because-you-watched.json`,
-  });
-  assert.deepEqual(res.json(), { metas: [] });
 });

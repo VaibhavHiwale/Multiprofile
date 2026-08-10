@@ -1,11 +1,10 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
-import { join } from 'node:path';
+import { ErrorEventsRepo } from '../db/errorEvents.js';
 
-const LOG_PATH = process.env.SWITCHBOARD_ERROR_LOG_PATH ?? './data/errors.jsonl';
-const OUTPUT_DIR = process.env.SWITCHBOARD_ERROR_ROLLUP_DIR ?? './data/error-rollups';
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+export const ROLLUP_PREFIX = 'error-rollups';
 
+// Unchanged from scripts/weekly-error-rollup.js — same ISO-week labelling, so
+// rollup filenames stay comparable across the Node → Workers migration.
 export function isoWeekLabel(date) {
   const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   const dayNum = d.getUTCDay() || 7;
@@ -15,33 +14,23 @@ export function isoWeekLabel(date) {
   return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
 }
 
-export async function loadRecords(logPath) {
-  let text;
-  try {
-    text = await readFile(logPath, 'utf8');
-  } catch {
-    return [];
-  }
-  return text
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch {
-        return null;
-      }
-    })
-    .filter(Boolean);
+// Accepts either the D1 row shape (error_type) or the in-memory record shape
+// (errorType), so the same builder serves the cron job and the unit tests.
+function componentOf(row) {
+  return row.component ?? 'unknown';
+}
+
+function errorTypeOf(row) {
+  return row.error_type ?? row.errorType ?? 'Error';
 }
 
 export function buildMarkdown(records, now) {
   const byComponent = new Map();
   for (const r of records) {
-    const componentKey = r.component ?? 'unknown';
+    const componentKey = componentOf(r);
     if (!byComponent.has(componentKey)) byComponent.set(componentKey, new Map());
     const byType = byComponent.get(componentKey);
-    const typeKey = r.errorType ?? 'Error';
+    const typeKey = errorTypeOf(r);
     byType.set(typeKey, (byType.get(typeKey) ?? 0) + 1);
   }
 
@@ -73,27 +62,15 @@ export function buildMarkdown(records, now) {
   return `${lines.join('\n')}\n`;
 }
 
-export async function runRollup({
-  logPath = LOG_PATH,
-  outputDir = OUTPUT_DIR,
-  now = Date.now(),
-} = {}) {
-  const all = await loadRecords(logPath);
-  const recent = all.filter((r) => {
-    const t = Date.parse(r.timestamp);
-    return Number.isFinite(t) && now - t <= WEEK_MS;
+// The Cron Trigger body. Replaces `npm run rollup:errors` reading
+// ./data/errors.jsonl: the source is now the D1 error_events table and the
+// destination is an R2 object instead of a local file.
+export async function runWeeklyErrorRollup(env, { now = Date.now() } = {}) {
+  const records = await new ErrorEventsRepo(env.DB).listSince(now - WEEK_MS);
+  const markdown = buildMarkdown(records, now);
+  const key = `${ROLLUP_PREFIX}/${isoWeekLabel(new Date(now))}.md`;
+  await env.ASSETS_BUCKET.put(key, markdown, {
+    httpMetadata: { contentType: 'text/markdown; charset=utf-8' },
   });
-  const markdown = buildMarkdown(recent, now);
-
-  await mkdir(outputDir, { recursive: true });
-  const outputPath = join(outputDir, `${isoWeekLabel(new Date(now))}.md`);
-  await writeFile(outputPath, markdown, 'utf8');
-  return { outputPath, recordCount: recent.length };
-}
-
-const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isMain) {
-  runRollup().then(({ outputPath, recordCount }) => {
-    console.log(`Wrote ${outputPath} (${recordCount} record(s))`);
-  });
+  return { key, recordCount: records.length };
 }

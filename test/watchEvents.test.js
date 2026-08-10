@@ -1,39 +1,61 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { openDatabase } from '../src/db/index.js';
-import { WatchEventsRepo } from '../src/db/watchEvents.js';
+import { env } from 'cloudflare:test';
+import { describe, it, expect } from 'vitest';
 import { HouseholdsRepo } from '../src/db/households.js';
+import { WatchEventsRepo } from '../src/db/watchEvents.js';
 
-function makeRepos() {
-  const db = openDatabase(':memory:');
-  return { households: new HouseholdsRepo(db), watchEvents: new WatchEventsRepo(db) };
+function repos() {
+  return { households: new HouseholdsRepo(env.DB), watchEvents: new WatchEventsRepo(env.DB) };
 }
 
-test('logEvent dedupes repeated movie events despite NULL season/episode', () => {
-  const { households, watchEvents } = makeRepos();
-  const token = households.createHousehold();
-  const profile = households.createProfile(token, { name: 'Alice' });
+describe('WatchEventsRepo (D1)', () => {
+  it('logEvent dedupes repeated movie events despite NULL season/episode', async () => {
+    const { households, watchEvents } = repos();
+    const token = await households.createHousehold();
+    const profile = await households.createProfile(token, { name: 'Alice' });
 
-  watchEvents.logEvent(profile.id, { contentType: 'movie', imdbId: 'tt0111161' });
-  watchEvents.logEvent(profile.id, { contentType: 'movie', imdbId: 'tt0111161' });
-  watchEvents.logEvent(profile.id, { contentType: 'movie', imdbId: 'tt0068646' });
+    await watchEvents.logEvent(profile.id, { contentType: 'movie', imdbId: 'tt0111161' });
+    await watchEvents.logEvent(profile.id, { contentType: 'movie', imdbId: 'tt0111161' });
+    await watchEvents.logEvent(profile.id, { contentType: 'movie', imdbId: 'tt0068646' });
 
-  assert.equal(watchEvents.countForProfile(profile.id), 2);
-  const recent = watchEvents.listRecentDeduped(profile.id, 10);
-  assert.equal(recent.length, 2);
-});
+    expect(await watchEvents.countForProfile(profile.id)).toBe(2);
+    expect((await watchEvents.listRecentDeduped(profile.id, 10)).length).toBe(2);
+  });
 
-test('logEvent dedupes per series episode, keeping distinct episodes', () => {
-  const { households, watchEvents } = makeRepos();
-  const token = households.createHousehold();
-  const profile = households.createProfile(token, { name: 'Alice' });
+  it('logEvent updates the same series episode in place, keeping distinct episodes separate', async () => {
+    const { households, watchEvents } = repos();
+    const token = await households.createHousehold();
+    const profile = await households.createProfile(token, { name: 'Alice' });
 
-  watchEvents.logEvent(profile.id, { contentType: 'series', imdbId: 'tt0903747', season: 1, episode: 1 });
-  watchEvents.logEvent(profile.id, { contentType: 'series', imdbId: 'tt0903747', season: 1, episode: 2 });
+    await watchEvents.logEvent(profile.id, {
+      contentType: 'series',
+      imdbId: 'tt0903747',
+      season: 1,
+      episode: 1,
+    });
+    await watchEvents.logEvent(profile.id, {
+      contentType: 'series',
+      imdbId: 'tt0903747',
+      season: 1,
+      episode: 2,
+    });
 
-  // recentDeduped groups by imdb_id only, so the series collapses to its
-  // single most-recently-touched episode row.
-  const recent = watchEvents.listRecentDeduped(profile.id, 10);
-  assert.equal(recent.length, 1);
-  assert.equal(recent[0].episode, 2);
+    // recentDeduped groups by imdb_id, so the series collapses to its single
+    // most-recently-touched episode row — never two rows for the same show.
+    const recent = await watchEvents.listRecentDeduped(profile.id, 10);
+    expect(recent.length).toBe(1);
+    expect(recent[0].episode).toBe(2);
+  });
+
+  it('distinctImdbIds returns a Set of unique titles', async () => {
+    const { households, watchEvents } = repos();
+    const token = await households.createHousehold();
+    const profile = await households.createProfile(token, { name: 'Alice' });
+
+    await watchEvents.logEvent(profile.id, { contentType: 'movie', imdbId: 'tt0111161' });
+    await watchEvents.logEvent(profile.id, { contentType: 'movie', imdbId: 'tt0068646' });
+
+    const ids = await watchEvents.distinctImdbIds(profile.id);
+    expect(ids).toBeInstanceOf(Set);
+    expect([...ids].sort()).toEqual(['tt0068646', 'tt0111161']);
+  });
 });
