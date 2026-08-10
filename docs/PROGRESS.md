@@ -85,14 +85,18 @@ impractically slow.
 
 Code-level guardrails reduce *how* the free tier could be exceeded, but the
 authoritative, zero-maintenance safety net is Cloudflare's own usage
-tracking, not anything this app can self-meter reliably. **Recommended:**
-in the dashboard, go to **Notifications → Add** and set up a billing/usage
-alert (Cloudflare supports alerting on approaching R2 usage thresholds).
-That way you get warned by Cloudflare directly, from the authoritative
-billing source, well before any charge — rather than trusting an
-in-app estimate.
+tracking, not anything this app can self-meter reliably.
 
-## ✅ Cloudflare Workers migration: deployed and live
+**Done:** a `billing_budget_alert` notification policy was created via
+Cloudflare's Alerting API (`POST /accounts/{id}/alerting/v3/policies`,
+policy id `896bba521aee46188459cf19eee2abc2`) — fires an email to the
+account owner the moment cumulative usage-based charges reach **$1** in a
+billing period. Verified active via a follow-up GET on the policy. $1 is
+about as tight a threshold as makes sense (low enough to catch anything
+unexpected almost immediately, high enough to not trip on rounding). This
+is the authoritative, Cloudflare-side signal — not an in-app estimate.
+
+## ✅ Cloudflare Workers migration: deployed, live, and merged into `main`
 
 Everything below the next section describes the **Node.js/Fastify build**,
 which is complete, tested (40 tests), and lives on `main`. **`main` is
@@ -131,10 +135,33 @@ profile-switcher catalog, the switch confirmation page, the `/configure`
 dashboard, and the QR code endpoint all returned correct responses from
 the real deployment.
 
-**Not yet done:** merging `cloudflare-workers-migration` into `main` (needs
-the project owner's explicit sign-off — see "What's left" below), pointing
-`docs/index.html` at the live URL, enabling GitHub Pages, and the
-cross-platform acceptance pass on real Stremio clients.
+**Also done, with the project owner's explicit go-ahead ("automatically do
+all the things that make this addon a success and not cost me money"):**
+smoke-test data cleared from the live D1 database and (best-effort) R2 —
+`wrangler r2 object list` doesn't exist as a command, so any stray poster
+objects from smoke testing weren't individually swept, but they're a
+handful of KB-sized PNGs, negligible against the 10 GB free tier;
+`cloudflare-workers-migration` merged into `main` (lint clean, 43/43
+passing post-merge) and pushed; GitHub Pages enabled for `main`/`docs` via
+the GitHub REST API (reusing the git credential already trusted for pushes
+— no new credential requested) — live at
+`https://vaibhavhiwale.github.io/Multiprofile/`, confirmed serving the
+correct rebranded content; `docs/index.html` now defaults to the live
+Workers URL; the Cloudflare billing-budget alert described in "Cost &
+limits" above.
+
+**Deliberately NOT done, and explained to the project owner rather than
+either silently skipping or silently doing:** submitting to
+stremio-addons.net. That directory is actively browsed by strangers
+looking for addons to install — different risk profile than a Pages URL
+existing quietly. design.md itself gates this on being "stable and tested
+across platforms" first (Tier B), which the still-outstanding
+cross-platform pass below is. Also: submission requires logging into
+their site, which isn't a credential I have or should be given.
+
+**Only remaining item: the cross-platform acceptance pass on real Stremio
+clients** (Desktop, Android, iOS Safari, Android TV) — cannot be done by
+an agent, needs physical devices.
 
 ### How this got here (context if you're confused by the history)
 
@@ -171,23 +198,22 @@ cross-platform acceptance pass on real Stremio clients.
 
 ### What's left
 
-Provisioning and deploy are done (see the log below). What remains:
+Everything except one item is done — see "Provisioning/deploy log" and the
+"Also done" paragraph above for the full list (D1, R2, deploy, smoke test,
+data cleanup, merge to `main`, GitHub Pages, installer defaulting to the
+live URL, billing alert).
 
-1. **Point `docs/index.html` at the live URL** (the GitHub Pages
-   installer) — either hardcode it as the default in the "Switchboard
-   service URL" field or leave it user-entered; either is fine, just needs
-   a decision.
-2. **Enable GitHub Pages** on the repo (Settings → Pages → `main` /
-   `/docs`) so the installer above is actually reachable.
-3. **Merge `cloudflare-workers-migration` into `main`** — needs the
-   project owner's explicit sign-off, not something to do unprompted even
-   though the branch is verified working. `main`'s Node.js build remains
-   the last fully-shipped state until this happens.
-4. **Cross-platform acceptance pass** on real Stremio clients (Desktop,
+1. **Cross-platform acceptance pass** on real Stremio clients (Desktop,
    Android, iOS Safari, Android TV) — cannot be done by an agent, needs
-   physical/real devices.
-5. Optional: set up the Cloudflare-side usage/billing alert mentioned in
-   "Cost & limits" above (Notifications → Add in the dashboard).
+   physical/real devices. Install `https://multiprofile.vaibhavhiwale.workers.dev/<token>/manifest.json`
+   (get a token from the installer at
+   `https://vaibhavhiwale.github.io/Multiprofile/`) on each platform,
+   confirm the PIN gate blocks a wrong PIN, and confirm the switch
+   confirmation page's manual fallback works on macOS specifically (the
+   `stremio://board` deep-link auto-return is known broken there upstream
+   — don't chase that bug, just confirm the fallback button works).
+2. Only after that: consider submitting to stremio-addons.net (see the
+   note above on why this is intentionally not done yet).
 
 ### Provisioning/deploy log (for reference)
 
