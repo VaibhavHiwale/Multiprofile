@@ -92,7 +92,7 @@ That way you get warned by Cloudflare directly, from the authoritative
 billing source, well before any charge — rather than trusting an
 in-app estimate.
 
-## ⚠️ Current state as of the Cloudflare Workers migration (read this first)
+## ✅ Cloudflare Workers migration: deployed and live
 
 Everything below the next section describes the **Node.js/Fastify build**,
 which is complete, tested (40 tests), and lives on `main`. **`main` is
@@ -106,18 +106,35 @@ replacing `setInterval`, D1's point-in-time recovery replacing the custom
 backup job) is on the `cloudflare-workers-migration` branch, pushed to
 `origin`.
 
-**Status: the local build is now verified working.** `npm run lint` is
-clean and `npm test` passes **42/42 tests** (exceeding the Node build's 40)
-across 12 test files, covering: households/profiles repo + HTTP CRUD, PIN
-gate + atomic switch, the profile-switcher catalog/meta/stream/poster
-routes, the switch confirmation page (PIN form, wrong/right PIN), watch-event
-logging + dedupe (including the NULL-safe season/episode upsert), continue-
-watching, because-you-watched recommendations, D1-backed error logging +
-the R2-backed weekly rollup, the `/configure` dashboard + stats + QR code,
-and the rate-limiter Durable Object (both directly and end-to-end via a
-429 on a mutating route). **Nothing has been deployed to a real Cloudflare
-account** — all of this runs against Miniflare's local simulation of
-D1/R2/Durable Objects, which needs no credentials.
+**Status: locally verified AND deployed live.** `npm run lint` clean,
+`npm test` passes **43/43 tests** (exceeding the Node build's 40) across 12
+test files — households/profiles repo + HTTP CRUD, PIN gate + atomic
+switch, the profile-switcher catalog/meta/stream/poster routes, the switch
+confirmation page (PIN form, wrong/right PIN), watch-event logging +
+dedupe (including the NULL-safe season/episode upsert), continue-watching,
+because-you-watched recommendations, D1-backed error logging + the
+R2-backed weekly rollup, the `/configure` dashboard + stats + QR code, and
+the rate-limiter Durable Object (direct, end-to-end on profile mutations,
+and end-to-end on household creation).
+
+**Live URL: `https://multiprofile.vaibhavhiwale.workers.dev`** — real D1
+database (`multiprofile-db`) and R2 bucket (`multiprofile-assets`)
+provisioned on the project owner's Cloudflare account, schema migration
+applied to the remote database, `wrangler deploy` succeeded, and a full
+smoke test against the live URL passed: household creation, profile
+creation (including an emoji avatar verified to round-trip correctly as
+real UTF-8 — an initial curl-based check showed `??` instead of the emoji,
+traced to Git Bash's shell mangling a literal emoji typed on the command
+line, *not* a server bug; confirmed by re-testing with Node's `fetch`,
+which bypasses the shell entirely), poster PNG generation, the
+profile-switcher catalog, the switch confirmation page, the `/configure`
+dashboard, and the QR code endpoint all returned correct responses from
+the real deployment.
+
+**Not yet done:** merging `cloudflare-workers-migration` into `main` (needs
+the project owner's explicit sign-off — see "What's left" below), pointing
+`docs/index.html` at the live URL, enabling GitHub Pages, and the
+cross-platform acceptance pass on real Stremio clients.
 
 ### How this got here (context if you're confused by the history)
 
@@ -152,31 +169,46 @@ D1/R2/Durable Objects, which needs no credentials.
    `src/lib/fonts.js` but didn't exist (added — Roboto is Apache-2.0 and
    is redistributed in this repo as a font asset for poster generation).
 
-### What's left before this can go live
+### What's left
 
-Real Cloudflare credentials (API token + account ID) have been provided by
-the project owner and verified present as `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_ACCOUNT_ID` user-level environment variables on the dev
-machine. **Nothing has been provisioned or deployed with them yet.** Next:
+Provisioning and deploy are done (see the log below). What remains:
 
-1. `wrangler d1 create multiprofile-db` → paste the printed database_id
-   over `REPLACE_ME_WITH_REAL_D1_DATABASE_ID` in `wrangler.toml`.
-2. `wrangler r2 bucket create multiprofile-assets`.
-3. Apply the schema to the real (not local) D1 database:
-   `wrangler d1 migrations apply multiprofile-db --remote`.
-4. `wrangler dev` as a final local sanity check against the real bindings.
-5. `wrangler deploy` → publishes to `multiprofile.<account-subdomain>.workers.dev`.
-6. Smoke-test the live URL directly (create a household, create a profile,
-   check the poster renders, check the switch flow) before treating it as
-   production-ready.
-7. Only after that: merge `cloudflare-workers-migration` into `main` with
-   the project owner's explicit sign-off, point `docs/index.html` (the
-   GitHub Pages installer) at the live URL, and update this file's phase
-   table to reflect the Workers stack as the primary deployment.
+1. **Point `docs/index.html` at the live URL** (the GitHub Pages
+   installer) — either hardcode it as the default in the "Switchboard
+   service URL" field or leave it user-entered; either is fine, just needs
+   a decision.
+2. **Enable GitHub Pages** on the repo (Settings → Pages → `main` /
+   `/docs`) so the installer above is actually reachable.
+3. **Merge `cloudflare-workers-migration` into `main`** — needs the
+   project owner's explicit sign-off, not something to do unprompted even
+   though the branch is verified working. `main`'s Node.js build remains
+   the last fully-shipped state until this happens.
+4. **Cross-platform acceptance pass** on real Stremio clients (Desktop,
+   Android, iOS Safari, Android TV) — cannot be done by an agent, needs
+   physical/real devices.
+5. Optional: set up the Cloudflare-side usage/billing alert mentioned in
+   "Cost & limits" above (Notifications → Add in the dashboard).
 
-Do **not** merge into `main` before step 6. `main`'s Node.js build remains
-the last fully-shipped state of this project until the Workers version is
-proven live.
+### Provisioning/deploy log (for reference)
+
+- `wrangler d1 create multiprofile-db` → database id
+  `276f251f-ef25-44b4-b5d8-884bd815e040`, filled into `wrangler.toml`.
+- `wrangler d1 migrations apply multiprofile-db --remote` → applied
+  `0001_initial_schema.sql`, all 5 tables confirmed present via
+  `wrangler d1 execute ... --command "SELECT name FROM sqlite_master..."`.
+- `wrangler r2 bucket create multiprofile-assets` → required enabling R2
+  through the dashboard first (a one-time, per-account manual step;
+  `wrangler`/API tokens cannot do this on their own — R2 has its own
+  terms-of-service acceptance flow).
+- `wrangler deploy` → required registering a `workers.dev` subdomain
+  through the dashboard first (same category of one-time manual step).
+  The account subdomain (`vaibhavhiwale`) is **account-wide, not
+  per-project** — every future Worker on this account automatically gets
+  `<worker-name>.vaibhavhiwale.workers.dev` with no further setup.
+- Deployed URL: `https://multiprofile.vaibhavhiwale.workers.dev`. Took a
+  couple of minutes after the first successful deploy for DNS/TLS to
+  actually route (expected — Cloudflare's own deploy output says as much).
+- Full smoke test against the live URL passed (see above).
 
 ## How to resume
 

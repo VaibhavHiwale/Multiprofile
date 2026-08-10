@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Switchboard — Household Installer</title>
+<title>MultiProfile — Household Installer</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -34,14 +34,14 @@
 </head>
 <body>
 <main>
-  <h1>Switchboard</h1>
+  <h1>MultiProfile</h1>
   <p class="sub">Create a household and install it into Stremio — no account, no manual URL editing.</p>
 
   <section id="setupSection">
-    <label for="apiBase">Your Switchboard service URL</label>
-    <input type="url" id="apiBase" placeholder="https://your-switchboard-host.example.com">
+    <label for="apiBase">Your MultiProfile service URL</label>
+    <input type="url" id="apiBase" placeholder="https://multiprofile.vaibhavhiwale.workers.dev">
     <p class="hint">
-      This is the address of the Switchboard backend you (or whoever runs your household's
+      This is the address of the MultiProfile backend you (or whoever runs your household's
       instance) deployed — see the project README for deployment options. Saved locally in
       this browser so you only need to enter it once.
     </p>
@@ -71,10 +71,14 @@
 
 <script>
 (function () {
-  const STORAGE_KEY = 'switchboard-api-base';
+  const STORAGE_KEY = 'multiprofile-api-base';
+  // The project owner's own deployment — a genuinely free, always-on
+  // Cloudflare Workers instance (see docs/PROGRESS.md). Prefilled so the
+  // default path really is "zero manual URL editing," but still fully
+  // editable for anyone self-hosting their own instance instead.
+  const DEFAULT_BASE = 'https://multiprofile.vaibhavhiwale.workers.dev';
   const apiBaseInput = document.getElementById('apiBase');
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (saved) apiBaseInput.value = saved;
+  apiBaseInput.value = localStorage.getItem(STORAGE_KEY) || DEFAULT_BASE;
 
   const setupError = document.getElementById('setupError');
   const resultSection = document.getElementById('resultSection');
@@ -88,7 +92,7 @@
     setupError.classList.add('hidden');
     const base = normalizedBase();
     if (!base || !/^https?:\/\//i.test(base)) {
-      setupError.textContent = 'Enter a valid http(s) URL for your Switchboard service.';
+      setupError.textContent = 'Enter a valid http(s) URL for your MultiProfile service.';
       setupError.classList.remove('hidden');
       return;
     }
