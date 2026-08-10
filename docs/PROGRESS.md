@@ -5,6 +5,93 @@ actually done (verified by tests, not just written), what's in flight, and
 the exact next step. The full spec lives in `docs/design.md` — this file is
 the status layer on top of it.
 
+## Cost & limits (read this if you're worried about being charged)
+
+Verified directly against Cloudflare's pricing pages, not assumed:
+[Workers pricing](https://developers.cloudflare.com/workers/platform/pricing/),
+[D1 pricing](https://developers.cloudflare.com/d1/platform/pricing/),
+[R2 pricing](https://developers.cloudflare.com/r2/pricing/).
+
+**The short version: Workers and D1, on the Free plan, cannot bill you at
+all — they just stop serving requests if you exceed the free tier. R2 is
+the only product here that can actually charge money, and only past a
+free allowance generous enough that normal household use won't come close.**
+
+### Why Workers/D1 are structurally safe on the Free plan
+
+Overage *pricing* for D1 (rows read/written past the free tier) and Workers
+(requests past 100K/day) is explicitly a **Workers Paid plan** ($5/mo
+baseline) feature. On the Workers **Free** plan — which this project is on
+unless someone deliberately upgrades it — there is no metered billing path
+for these at all. Exceeding the free tier just means requests start
+failing (D1 queries error, Worker invocations get rejected) rather than an
+invisible charge appearing. Free-plan limits, for reference:
+
+| Product | Free tier | What happens past it (Free plan) |
+|---|---|---|
+| Workers | 100,000 requests/day | Requests get rejected |
+| D1 | 5 GB storage, 5M rows read/day, 100K rows written/day | Queries error |
+
+A household-scale addon (a few people checking Stremio a few times a day)
+uses a vanishingly small fraction of these — the numbers above are sized
+for real production traffic, not a family's viewing habits.
+
+### R2 — the one product that can actually cost money
+
+R2 bills from the first byte past its free tier regardless of Workers
+plan, which is why Cloudflare required a card on file just to enable it.
+Free tier, then overage rate once exceeded:
+
+| | Free / month | Overage rate |
+|---|---|---|
+| Storage | 10 GB-month | $0.015 / GB-month |
+| Class A ops (writes/lists) | 1,000,000 | $4.50 / million |
+| Class B ops (reads) | 10,000,000 | $0.36 / million |
+| Egress | Unlimited, always free | — |
+
+Cloudflare rounds usage up to the next whole billing unit (e.g.
+1,000,001 ops bills as 2 million).
+
+**Where this codebase actually touches R2**, and why it's bounded:
+
+- `src/routes/stremio.js`'s poster route (`GET /:token/poster/:profileId`):
+  one Class B read per request (cache check), and — critically — a Class A
+  write **only on a cache miss**. The R2 object key is a content hash of
+  `(profile id, name, avatar_url, isActive, is_kids)`
+  (`posterCacheKey`), so each profile has **at most 2 stable cached
+  variants** (active/inactive) that, once rendered, are reused forever
+  until the profile's name/avatar/kids-flag actually changes. This is not
+  "one write per request" — it's bounded by how often profiles are edited,
+  which is rare.
+- The weekly Cron Trigger rollup (`src/lib/rollup.js`): one Class A write,
+  once a week. Negligible.
+- Storage: generated poster PNGs and rollup markdown files are tiny (a few
+  KB each); 10 GB free is enormous headroom at this scale.
+
+**The one real gap this surfaced, and the fix applied:** `POST
+/api/households` was completely unrate-limited. Every *other* mutating
+route is rate-limited per household token (`src/routes/profiles.js`), but
+an attacker could sidestep every one of those limits by simply minting a
+fresh token per request — unbounded token creation → unbounded profiles →
+unbounded D1 writes and, via the poster cache-miss path, unbounded R2
+Class A operations. Fixed in `src/app.js`: household creation is now
+rate-limited to 20/hour **per client IP** (via `cf-connecting-ip`, reusing
+the same `RateLimiter` Durable Object), tested in
+`test/rateLimiter.test.js`. 20/hour comfortably covers real use (creating
+households for family/friends) while making mass token-minting
+impractically slow.
+
+### What to actually do about it
+
+Code-level guardrails reduce *how* the free tier could be exceeded, but the
+authoritative, zero-maintenance safety net is Cloudflare's own usage
+tracking, not anything this app can self-meter reliably. **Recommended:**
+in the dashboard, go to **Notifications → Add** and set up a billing/usage
+alert (Cloudflare supports alerting on approaching R2 usage thresholds).
+That way you get warned by Cloudflare directly, from the authoritative
+billing source, well before any charge — rather than trusting an
+in-app estimate.
+
 ## ⚠️ Current state as of the Cloudflare Workers migration (read this first)
 
 Everything below the next section describes the **Node.js/Fastify build**,

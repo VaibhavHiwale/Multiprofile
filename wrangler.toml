@@ -24,7 +24,7 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "multiprofile-db"
-database_id = "REPLACE_ME_WITH_REAL_D1_DATABASE_ID"
+database_id = "276f251f-ef25-44b4-b5d8-884bd815e040"
 migrations_dir = "migrations"
 
 # ---------------------------------------------------------------------------

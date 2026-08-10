@@ -34,4 +34,27 @@ describe('RateLimiter Durable Object', () => {
     }
     expect(sawTooManyRequests).toBe(true);
   });
+
+  it('household creation is rate-limited per client IP, independently of the token-based limiter', async () => {
+    // Explicit cf-connecting-ip headers keep this test's bucket isolated from
+    // every other test in the suite (which all share the "unknown" bucket
+    // when Miniflare doesn't set the header) and from each other.
+    const ipA = { headers: { 'cf-connecting-ip': `1.2.3.${crypto.randomUUID().slice(0, 2)}` } };
+    const ipB = { headers: { 'cf-connecting-ip': `9.9.9.${crypto.randomUUID().slice(0, 2)}` } };
+
+    let sawTooManyRequests = false;
+    for (let i = 0; i < 25; i++) {
+      const res = await SELF.fetch(url('/api/households'), { method: 'POST', ...ipA });
+      if (res.status === 429) {
+        sawTooManyRequests = true;
+        break;
+      }
+      expect(res.status).toBe(201);
+    }
+    expect(sawTooManyRequests).toBe(true);
+
+    // A different client IP has its own, unaffected counter.
+    const otherIpRes = await SELF.fetch(url('/api/households'), { method: 'POST', ...ipB });
+    expect(otherIpRes.status).toBe(201);
+  });
 });

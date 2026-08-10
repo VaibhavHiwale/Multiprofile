@@ -6,6 +6,7 @@ import { TitleGenreCacheRepo } from './db/titleGenreCache.js';
 import { ErrorEventsRepo } from './db/errorEvents.js';
 import { buildManifest } from './lib/manifest.js';
 import { resolveHousehold, notFound } from './lib/householdGuard.js';
+import { checkRateLimit } from './do/rateLimiter.js';
 import profilesRoutes from './routes/profiles.js';
 import stremioRoutes from './routes/stremio.js';
 import switchRoutes from './routes/switch.js';
@@ -60,7 +61,25 @@ export function createApp() {
   // Household creation is the only unauthenticated write endpoint: it mints a
   // fresh opaque token and nothing else. No Stremio credential is ever
   // requested here or anywhere else in this service (see design.md §1).
+  //
+  // Every other mutating route is rate-limited *per household token*
+  // (src/routes/profiles.js), but this is the one route that MINTS tokens —
+  // an unlimited client could otherwise sidestep every per-token limit by
+  // simply generating a fresh token per request, driving unbounded D1 writes
+  // and, via the poster cache, unbounded R2 Class A operations (R2 is the one
+  // Cloudflare product here that bills from the first byte past its free
+  // tier — see docs/PROGRESS.md "Cost & limits"). Rate-limited per client IP
+  // instead. 20/hour is generous for real use (creating a handful of
+  // households for family/friends) while making mass token-minting
+  // impractically slow.
   app.post('/api/households', async (c) => {
+    const clientIp = c.req.header('cf-connecting-ip') ?? 'unknown';
+    const allowed = await checkRateLimit(c.env, `household-create:${clientIp}`, {
+      windowMs: 60 * 60 * 1000,
+      max: 20,
+    });
+    if (!allowed) return c.json({ error: 'too many requests' }, 429);
+
     const id = await c.get('households').createHousehold();
     return c.json({ token: id }, 201);
   });
