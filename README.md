@@ -1,17 +1,24 @@
-# Switchboard
+# MultiProfile
 
 A Stremio multi-profile manager: household-scoped catalogs so a shared
 Stremio install can behave like it has separate profiles — its own
 profile switcher, continue-watching, and genre-based recommendations,
 plus a proper household dashboard.
 
-**Status:** the application is functionally complete and tested
-(Phases 1–6, 8–9 of `docs/design.md`; 40 passing tests). What's left is
-not code: **it isn't deployed anywhere yet** (Phase 7 needs a real
-Cloudflare Tunnel or VPS target and credentials only a human can provide),
-and it hasn't been through a cross-platform acceptance pass on real
-Stremio clients (Phase 10). See `docs/PROGRESS.md` for the detailed,
-up-to-date phase-by-phase status and resume notes.
+Runs entirely on **Cloudflare Workers + D1 + R2** (Hono, Durable Objects
+for rate limiting, Cron Triggers for the weekly maintenance job) — a
+single-vendor, free-tier-friendly stack with no server to keep alive. See
+`docs/PROGRESS.md` for the detailed, up-to-date status, including how this
+project got here from an earlier Node.js/Fastify prototype (that build is
+preserved on `main`; this Workers rewrite lives on
+`cloudflare-workers-migration`).
+
+**Status:** locally verified — `npm run lint` clean, `npm test` passing
+(43 tests, run against Cloudflare's local Miniflare simulation, no real
+account needed). The real D1 database and R2 bucket have been provisioned
+on Cloudflare; final deploy to a public URL and a cross-platform
+acceptance pass are what's left. See `docs/PROGRESS.md` for the exact
+remaining steps.
 
 ## Architectural trade-off (read this first)
 
@@ -34,36 +41,44 @@ PIN-gated kid profiles filter *this addon's own* catalog rows (Continue
 Watching, Because You Watched) by Cinemeta genre metadata. They cannot
 filter what other installed addons (Torrentio, MediaFusion, etc.)
 independently return — this is scoped parental awareness within
-Switchboard's own catalogs, not a device-wide content lock. The
+MultiProfile's own catalogs, not a device-wide content lock. The
 `/configure` dashboard states this explicitly; don't market it as more
 than it is.
+
+## Cost & limits
+
+Read `docs/PROGRESS.md`'s "Cost & limits" section before worrying about
+this. Short version, verified directly against Cloudflare's pricing pages:
+Workers and D1 on the Free plan cannot bill overages at all — they just
+reject requests past the free tier. R2 is the only product here that can
+actually charge money, and this codebase's R2 usage is structurally
+bounded (at most two cached poster images per profile, ever, plus one tiny
+markdown file a week).
 
 ## Running locally
 
 ```sh
 npm install
-npm test
-npm run dev
+npm test          # runs entirely against a local Miniflare simulation
+npm run dev        # wrangler dev --local
 ```
 
-Environment variables (all optional):
-
-- `PORT` (default `3000`), `HOST` (default `0.0.0.0`)
-- `SWITCHBOARD_DB_PATH` (default `./data/switchboard.db`)
-- `SWITCHBOARD_BACKUP_PATH` (default `./data/backups/switchboard-backup.db`) —
-  nightly `.backup()` + `VACUUM` target
-- `SWITCHBOARD_ERROR_LOG_PATH` (default `./data/errors.jsonl`) — structured
-  failure log; roll it up with `npm run rollup:errors`
+No environment variables or Cloudflare account are needed for the above.
+Deploying for real needs `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`
+and the real resource IDs filled into `wrangler.toml` — see
+`docs/PROGRESS.md` for the exact steps.
 
 ## What's here
 
 - **Household + profiles**: opaque 128-bit token per household, up to 12
-  profiles, argon2id-hashed PINs, atomic active-profile switch.
+  profiles, argon2id-hashed PINs (WASM, `@noble/hashes` — Workers has no
+  native-binary support), atomic active-profile switch.
 - **In-Stremio profile switcher**: a generated poster per profile
-  (`@napi-rs/canvas`, emoji or initials), reached via a "Switch to {Name}"
-  stream item that opens a confirmation page — PIN gate, an auto-attempted
-  `stremio://board` deep link, and an always-visible manual fallback button
-  (the deep link is known to silently fail on some platforms/clients).
+  (`@cf-wasm/satori` + `@cf-wasm/resvg`, emoji or initials), reached via a
+  "Switch to {Name}" stream item that opens a confirmation page — PIN
+  gate, an auto-attempted `stremio://board` deep link, and an
+  always-visible manual fallback button (the deep link is known to
+  silently fail on some platforms/clients).
 - **Continue Watching**: deduped to one row per title, with a "next
   episode" heuristic for series (not verified against actual episode
   counts — a documented simplification).
@@ -77,18 +92,18 @@ Environment variables (all optional):
   editing. Needs GitHub Pages enabled on this repo (Settings → Pages →
   Deploy from branch → `main` / `/docs`) to actually go live; not enabled
   yet.
-- **Reliability**: WAL-mode SQLite, nightly backup + VACUUM, per-token
-  rate limiting, watch-event row-cap pruning, a crash-durability test that
-  verifies an ungraceful restart loses no committed writes, and structured
-  error logging with a weekly markdown rollup (`npm run rollup:errors`).
+- **Reliability**: D1 (point-in-time recovery built in — no custom backup
+  job needed), per-IP and per-household-token rate limiting via a Durable
+  Object, watch-event row-cap pruning, and structured D1-backed error
+  logging with a Cron-Trigger-driven weekly markdown rollup to R2.
 
 ## Not here yet
 
-- **Deployment.** No Cloudflare Tunnel / VPS has been set up. See
-  `docs/design.md` §7 for the two options; this needs a decision plus
-  actual infrastructure access.
-- **Cross-platform acceptance** (`docs/design.md` §10) on real Stremio
-  clients — Desktop, Android, iOS Safari, Android TV.
+- **Live deployment.** D1 and R2 are provisioned on the real account;
+  `wrangler deploy` to a public URL hasn't happened yet. See
+  `docs/PROGRESS.md` for the exact remaining steps.
+- **Cross-platform acceptance** on real Stremio clients — Desktop,
+  Android, iOS Safari, Android TV.
 
 ## License
 
