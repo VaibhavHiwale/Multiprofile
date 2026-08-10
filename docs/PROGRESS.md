@@ -5,38 +5,65 @@ actually done (verified by tests, not just written), what's in flight, and
 the exact next step. The full spec lives in `docs/design.md` — this file is
 the status layer on top of it.
 
-## Real-device finding: `type: 'other'` doesn't work for actionable cards
+## Real-device finding: the switcher works — the first diagnosis was wrong
 
-First cross-platform test (Stremio Desktop, 2026-08-10) found a real bug
-neither the design doc, the protocol spec, nor local testing could have
-caught: the profile-switcher catalog/meta/stream were declared as
-`type: 'other'`. The catalog rendered fine on the Board ("Switch Profile -
-Other" row, cards visible), but tapping a profile card opened the detail
-page and then showed Stremio's own green **"Install addons"** button
-instead of the addon's actual "Switch to {name}" stream/`externalUrl`
-action — regardless of what the addon's `/stream` endpoint returned
-(verified: the live API's raw JSON response was correct and well-formed).
+First cross-platform test (Stremio Desktop and Web, 2026-08-10) surfaced a
+confusing symptom: tapping a profile card showed a green **"Install
+addons"** button next to a small "Switch to {name}" text link, and it
+looked like nothing was there / nothing worked.
 
-Root cause (best-supported theory, since Stremio's client-side rendering
-logic isn't part of the published protocol spec): `type: 'other'` is
-effectively reserved by the Stremio client for **meta-addon catalogs** — an
-addon whose catalog lists *other addons* to install — so opening any
-`type: 'other'` meta's stream list shows Stremio's built-in addon-catalog
-UI instead of the addon's own response. This is undocumented behavior, not
-a bug in this codebase, but it made the entire profile-switcher
-non-functional despite every layer of automated testing passing.
+**First hypothesis (recorded here, then disproven — kept for the record
+rather than quietly erased):** that `type: 'other'` was reserved by the
+Stremio client for meta-addon catalogs and silently discarded the stream
+response. The catalog/meta/stream were changed from `type: 'other'` to
+`type: 'movie'` on that theory. This change is harmless and arguably more
+conventional, so it was kept, but **it was not the actual fix** — see
+below.
 
-**Fix:** changed the profile-switcher catalog/meta/stream from
-`type: 'other'` to `type: 'movie'` — the type every real-world Stremio
-addon uses for this "actionable card with an externalUrl stream" pattern.
-`src/lib/manifest.js`, `src/routes/stremio.js`, and their tests were
-updated; verified against the live API after redeploying (manifest now
-advertises `types: ['movie', 'series']` only, catalog/meta/stream all
-respond correctly under `/movie/`). **Awaiting the project owner
-re-testing on Stremio Desktop to confirm the fix actually renders a
-tappable "Switch to {name}" action** — I can verify the server-side
-contract but not the client's rendering, which is exactly what broke here
-the first time.
+**Actual root cause, confirmed with real evidence, not inference:** there
+is no bug. `scripts`/ad-hoc Playwright automation (`playwright-core`
+driving a real Edge/Chromium instance — see method below) installed the
+live addon into web.stremio.com, opened a profile's detail page, and
+captured the exact network traffic: the `/stream/movie/multiprofile:profile:*.json`
+request returned `200` with the correct
+`{"streams":[{"name":"MultiProfile","title":"Switch to {name}","externalUrl":"..."}]}`
+body — no different from every earlier manual `curl` test. The rendered
+DOM showed **both** elements as permanent siblings:
+
+```html
+<div class="streams-container">
+  <a href="https://.../switch/{profileId}" target="_blank">MultiProfile / Switch to {name}</a>
+  <a href="#/addons">Install addons</a>
+</div>
+```
+
+"Install addons" is a **generic button Stremio shows on every content
+page**, completely unrelated to whether an addon's stream succeeded — not
+an error fallback. The actual "Switch to {name}" link was present the
+entire time, rendered as small unstyled text (no poster thumbnail, since
+it's an external link rather than a torrent/stream result) sitting right
+next to a much more visually prominent green button. Automating an actual
+click on it confirmed it opens `.../switch/{profileId}` in a new tab —
+exactly the designed confirmation flow.
+
+**This was a discoverability/UX issue, not a functional bug**, and not one
+this codebase can fix by itself — how prominently Stremio renders an
+`externalUrl` stream entry is entirely the client's own rendering, outside
+this addon's control. The design doc's PIN-gate/deep-link UX notes already
+anticipated needing a manual fallback path; this is the same category of
+"real client behavior differs from what the spec implies" risk, just
+milder than a true break.
+
+**Debugging method worth keeping for next time:** `curl`/`fetch` against
+the raw API can only prove the *server* contract is correct; it cannot
+prove what a real Stremio client does with the response. Installing
+`playwright-core` (no `npx playwright install` browser download needed —
+pointed `executablePath` at the system's existing Edge install) and
+scripting an actual install-addon → open-profile → capture-network flow
+gave a definitive, evidence-based answer in minutes, after multiple rounds
+of plausible-but-wrong theorizing from documentation and source code
+alone. Prefer this over guessing when the question is "what does the real
+client do," not "what does the spec say."
 
 ## Cost & limits (read this if you're worried about being charged)
 
