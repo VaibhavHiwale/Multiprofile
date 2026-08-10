@@ -7,7 +7,7 @@ describe('stremio catalog/meta/stream/poster', () => {
   it('catalog lists one meta card per profile with a poster URL', async () => {
     const { token, profile } = await createHouseholdWithProfile();
 
-    const res = await SELF.fetch(url(`/${token}/catalog/other/multiprofile-profiles.json`));
+    const res = await SELF.fetch(url(`/${token}/catalog/movie/multiprofile-profiles.json`));
     expect(res.status).toBe(200);
     const { metas } = await res.json();
     expect(metas.length).toBe(1);
@@ -18,7 +18,7 @@ describe('stremio catalog/meta/stream/poster', () => {
 
   it('an unknown catalog id 404s', async () => {
     const { token } = await createHouseholdWithProfile();
-    const res = await SELF.fetch(url(`/${token}/catalog/other/bogus.json`));
+    const res = await SELF.fetch(url(`/${token}/catalog/movie/bogus.json`));
     expect(res.status).toBe(404);
   });
 
@@ -26,11 +26,11 @@ describe('stremio catalog/meta/stream/poster', () => {
     const { token, profile } = await createHouseholdWithProfile();
     const id = `${PROFILE_ID_PREFIX}${profile.id}`;
 
-    const metaRes = await SELF.fetch(url(`/${token}/meta/other/${id}.json`));
+    const metaRes = await SELF.fetch(url(`/${token}/meta/movie/${id}.json`));
     expect(metaRes.status).toBe(200);
     expect((await metaRes.json()).meta.id).toBe(id);
 
-    const streamRes = await SELF.fetch(url(`/${token}/stream/other/${id}.json`));
+    const streamRes = await SELF.fetch(url(`/${token}/stream/movie/${id}.json`));
     expect(streamRes.status).toBe(200);
     const { streams } = await streamRes.json();
     expect(streams.length).toBe(1);

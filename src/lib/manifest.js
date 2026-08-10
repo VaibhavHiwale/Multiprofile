@@ -26,20 +26,32 @@ export function buildManifest(householdToken) {
       'never requests or stores your Stremio account credentials.',
     // Scoped resource objects, not the bare-string shorthand, so this addon is
     // never queried for meta/streams of content it doesn't own.
+    //
+    // The profile-switcher catalog/meta/stream use type 'movie', not 'other'.
+    // 'other' turned out, in real-device testing, to be effectively reserved
+    // by the Stremio client for meta-addon catalogs (an addon that lists
+    // other addons to install) — opening a type:'other' meta's stream list
+    // shows Stremio's own "Install addons" prompt instead of the addon's
+    // actual stream/externalUrl response, regardless of what the addon
+    // returns. This isn't documented in the protocol spec; it was only
+    // found by installing on Stremio Desktop (see docs/PROGRESS.md).
+    // 'movie' is the type every addon uses for this "actionable card"
+    // pattern and is confirmed to render stream/externalUrl actions
+    // normally.
     resources: [
-      { name: 'catalog', types: ['other', 'movie', 'series'] },
-      { name: 'meta', types: ['other'], idPrefixes: [ID_NAMESPACE] },
-      { name: 'stream', types: ['other'], idPrefixes: [ID_NAMESPACE] },
+      { name: 'catalog', types: ['movie', 'series'] },
+      { name: 'meta', types: ['movie'], idPrefixes: [ID_NAMESPACE] },
+      { name: 'stream', types: ['movie'], idPrefixes: [ID_NAMESPACE] },
       // Registered purely to observe watch activity (see design.md §1/§4.3)
       // — this addon never returns a playable stream itself.
       { name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt'] },
     ],
-    types: ['other', 'movie', 'series'],
+    types: ['movie', 'series'],
     // Continue Watching and Because You Watched are each two catalog entries
     // sharing one id (movie + series) rather than one mixed-type catalog —
     // that's how mixed rows work under Stremio's per-type catalog model.
     catalogs: [
-      { type: 'other', id: PROFILES_CATALOG_ID, name: 'Switch Profile', extra: [] },
+      { type: 'movie', id: PROFILES_CATALOG_ID, name: 'Switch Profile', extra: [] },
       { type: 'movie', id: CONTINUE_WATCHING_CATALOG_ID, name: 'Continue Watching', extra: [] },
       { type: 'series', id: CONTINUE_WATCHING_CATALOG_ID, name: 'Continue Watching', extra: [] },
       { type: 'movie', id: BECAUSE_YOU_WATCHED_CATALOG_ID, name: 'Because You Watched', extra: [] },

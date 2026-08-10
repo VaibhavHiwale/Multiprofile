@@ -60,7 +60,7 @@ function profileMeta({ profile, household, origin, token }) {
   const isActive = profile.id === household.active_profile_id;
   return {
     id: `${PROFILE_ID_PREFIX}${profile.id}`,
-    type: 'other',
+    type: 'movie',
     name: isActive ? `${profile.name} ✓` : profile.name,
     poster: `${origin}/${token}/poster/${profile.id}.png`,
     posterShape: 'square',
@@ -97,7 +97,7 @@ routes.get('/:token/catalog/:type/:catalogId', async (c) => {
   const errors = c.get('errorEvents');
   const budget = createFetchBudget();
 
-  if (type === 'other' && catalogId === PROFILES_CATALOG_ID) {
+  if (type === 'movie' && catalogId === PROFILES_CATALOG_ID) {
     const origin = baseUrl(c);
     const profiles = await c.get('households').listProfiles(household.id);
     const metas = profiles.map((profile) =>
@@ -143,7 +143,7 @@ routes.get('/:token/meta/:type/:id', async (c) => {
 
   const type = c.req.param('type');
   const id = c.req.param('id').replace(/\.json$/, '');
-  if (type !== 'other' || !id.startsWith(PROFILE_ID_PREFIX)) return notFound(c);
+  if (type !== 'movie' || !id.startsWith(PROFILE_ID_PREFIX)) return notFound(c);
 
   const profile = await c
     .get('households')
@@ -163,7 +163,7 @@ routes.get('/:token/stream/:type/:id', async (c) => {
   const type = c.req.param('type');
   const id = c.req.param('id').replace(/\.json$/, '');
 
-  if (type === 'other' && id.startsWith(PROFILE_ID_PREFIX)) {
+  if (type === 'movie' && id.startsWith(PROFILE_ID_PREFIX)) {
     const profile = await c
       .get('households')
       .getProfile(household.id, id.slice(PROFILE_ID_PREFIX.length));
