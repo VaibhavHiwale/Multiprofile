@@ -30,19 +30,28 @@ export function renderPinForm({ token, profileId, name, error = null }) {
 </main></body></html>`;
 }
 
-// design.md §2: the stremio:// deep link is known to silently fail on macOS
-// (Stremio/stremio-bugs#2466, #2484). The manual button is therefore the
-// primary path and the auto-redirect is the enhancement — not the reverse.
+// design.md §2 anticipated the stremio:// deep link being unreliable
+// (Stremio/stremio-bugs#2466, #2484 documents it silently failing on
+// macOS). Real-device testing (2026-08-10, Windows) found something worse
+// than silent failure: an *automatic* redirect attempt to stremio://board
+// tripped a bug in that Stremio build's own deep-link handler, which
+// misread it as an addon-install request and threw a visible error dialog
+// on every single switch. Firing that unprompted on every page load is
+// worse than not attempting it at all, so there is no longer an automatic
+// redirect — only the manual button, which is opt-in (the user chose to
+// tap it) rather than a surprise. The switch itself (the D1 write) always
+// happens before this page renders, regardless of what the button does.
 export function renderSwitchConfirmation({ name }) {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Switched to ${escapeHtml(name)} — ${ADDON_NAME}</title><style>${BASE_STYLE}</style>
-<script>setTimeout(function () { window.location.href = 'stremio://board'; }, 400);</script>
 </head>
 <body><main>
   <h1>Switched to ${escapeHtml(name)}</h1>
-  <p>Attempting to return you to Stremio automatically. If nothing happens
-     (this is a known issue on some platforms), tap the button below.</p>
-  <a class="btn" href="stremio://board">Tap here to return to your library</a>
+  <p>You can close this page and switch back to Stremio yourself, or try
+     the button below. On some Stremio versions it may show an error
+     instead of returning you automatically — if that happens, the switch
+     already worked, just go back to Stremio manually.</p>
+  <a class="btn" href="stremio://board">Try returning to Stremio</a>
 </main></body></html>`;
 }
